@@ -1,0 +1,33 @@
+{
+  "Lua.runtime.version": "Lua 5.4",
+  "Lua.diagnostics.disable": [
+    "undefined-global",
+    "unused-local",
+    "undefined-field",
+    "deprecated",
+    "unbalanced-assignments",
+    "need-check-nil",
+    "param-type-mismatch",
+    "duplicate-set-field",
+    "redundant-parameter"
+  ],
+  "Lua.diagnostics.globals": [
+    "component",
+    "computer",
+    "shell",
+    "fs",
+    "internet",
+    "keyboard",
+    "network",
+    "peripheral",
+    "serialization",
+    "term",
+    "Commands",
+    "os"
+  ],
+  "Lua.format.enable": true,
+  "Lua.diagnostics.neededFileStatus": {
+    "undefined-global": "Information",
+    "undefined-field": "Information"
+  }
+}
