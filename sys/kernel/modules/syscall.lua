@@ -25,9 +25,3 @@ polaris.syscalls.shutdown = function()
     prepareHalt("shutdown")
     computer.shutdown()
 end
-
-polaris.syscalls.halt = function(err)
-    if not err then err = "System halted" end
-    prepareHalt("halt")
-    assert(false, err)
-end

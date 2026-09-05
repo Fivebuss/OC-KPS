@@ -7,7 +7,7 @@ if gpu then
     if not gpu.getScreen() then
         gpu.bind(screen)
     end
-    _G.boot_screen = gpu.getScreen()
+    --_G.boot_screen = gpu.getScreen()
     w, h = gpu.maxResolution()
     gpu.setResolution(w, h)
     gpu.setBackground(0x000000)

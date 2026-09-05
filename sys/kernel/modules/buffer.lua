@@ -253,7 +253,8 @@ function buffer:writeln(...)
   return self:write(table.unpack(args, 1, args.n))
 end
 
--- Merging openOS's extensions in
+-- Extensions beyond openOS's same things
+-- So compatibility and potentially better
 
 function buffer:getTimeout()
   return self.readTimeout

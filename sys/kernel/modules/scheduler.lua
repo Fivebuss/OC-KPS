@@ -36,6 +36,7 @@ scheduler.SIG = {
     KILL = "KILL", -- Ctrl+/, forces it to die
     TSTP = "TSTP", -- CTRL Z
     CONT = "CONT", -- Continued
+    HUP  = "HUP",  -- Ctrl+D / hangup, kinda?
 }
 
 local threads = {}
@@ -303,7 +304,7 @@ function scheduler.killAll(exceptUid)
     if exceptUid then
         threads[exceptUid] = nil
         threadCount = threadCount - 1
-        -- Doesnt do onexit for whatever calls this, as thats during shutdown
+        -- So we can exclude onExit
     end
 end
 

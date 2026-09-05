@@ -1,8 +1,6 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
 
-local interval
-
 event = require("sys.kernel.modules.event")
 
 polaris = {} -- global
@@ -18,7 +16,8 @@ require("sys.kernel.modules.config")()
 
 -- Init scheduler
 polaris.scheduler = require("sys.kernel.modules.scheduler")
-polaris.scheduler.interval, interval = polaris.config["interval"] or 0.05 -- default one
+local interval = polaris.config["interval"] or 0.05
+polaris.scheduler.interval = interval
 
 polaris.scheduler.handler = polaris.scheduler.init(event, interval)
 

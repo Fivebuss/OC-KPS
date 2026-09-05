@@ -6,6 +6,12 @@ return {
         console:write("pong\n")
     end,
 
+    config = function(cenv)
+        for k, v in pairs(cenv.config) do
+            console:write(tostring(k), " = ", tostring(v), "\n")
+        end
+    end,
+
     debug = function(cenv)
         console:write("debug = ", tostring(cenv.debug) .. "\n")
     end,
@@ -86,11 +92,6 @@ return {
 
     shutdown = function(cenv)
         polaris.call("shutdown")
-        console:write("\n")
-    end,
-
-    halt = function(cenv)
-        polaris.call("halt", "Initconsole halted system")
         console:write("\n")
     end,
 

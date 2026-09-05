@@ -4,6 +4,7 @@
 local scheduler = polaris.scheduler
 local io = require("sys.kernel.modules.io")
 
+polaris.config["tty.profile"] = 7
 _G.console = polaris.tty.new(gpu)
 local isDebug = false
 
@@ -17,6 +18,7 @@ local cenv = {
     scheduler = scheduler,
     console = console,
     debug = polaris.config["debug"],
+    config = polaris.config,
 }
 
 if not isDebug then
@@ -26,14 +28,20 @@ end
 local function initShell()
     console:write("Init console loaded\n")
     while true do
-
-        coroutine.yield()
         console:write("> ")
+        console:flush()
 
-        local line = io.input(scheduler):readLine():gsub("\n$", "")
+        -- Get stdin for the current thread and read
+        local stdin = io.input(scheduler)
+        local line = stdin:readLine()
+
         if not line then
+            console:write("\n")
             return
         end
+
+        -- Get rid of line end
+        line = line:gsub("[\r\n]", "")
 
         local command = commands[line]
 
@@ -42,15 +50,20 @@ local function initShell()
         else
             io.write(scheduler, "unknown command: ", line, "\n")
         end
+        console:flush()
     end
 end
 
 local shellUid
 shellUid = scheduler.spawn(initShell, function(success, reason)
+    assert(success, reason)
     io.cleanupThread(shellUid)
-    if not success and reason ~= "killed" then
-        error(reason)
-    end
 end, "init_console")
 
+-- stdin isnt used really
 io.initThread(shellUid, console.reader, console, console)
+
+-- Register this thread as the "owner" of the console
+if console.attach then
+    console:attach(shellUid)
+end
