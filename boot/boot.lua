@@ -79,14 +79,8 @@ status("Registering modules")
 package.loaded.component = component
 package.loaded.computer = computer
 package.loaded.unicode = unicode
-package.loaded.buffer = dofile("/sys/kernel/modules/buffer.lua")
 package.loaded.filesystem = dofile("/lib/filesystem.lua")
 
-
-status("I/O initialization")
-
--- Initialize i/o
-_G.io = dofile("/sys/kernel/modules/io.lua")
 local filesystem = require("filesystem")
 
 
@@ -96,7 +90,7 @@ status("Mounting root filesystem")
 filesystem.mount(addr, "/")
 
 -- Initialize kernel
-dofile("/sys/kernel/kinit.lua")
+status(dofile("/sys/kernel/kinit.lua"))
 
 status("Executing stage 2 boot")
 
@@ -120,9 +114,8 @@ if polaris.config["initConsole"] == true then
 end
 
 -- Tell the system that initialization is complete.
-event.push("init")
-
--- Main loop to keep alive
+computer.pushSignal("init")
+-- Enter scheduler loop
 while true do
     event.pull()
 end

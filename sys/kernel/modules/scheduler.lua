@@ -310,7 +310,7 @@ end
 
 -- Returns the UID of the corountine active
 function scheduler.activeThread()
-    return activeUid
+    return activeUid or nil
 end
 
 -- Cleans up all handlers

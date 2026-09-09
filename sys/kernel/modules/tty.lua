@@ -98,6 +98,7 @@ end
 
 
 function tty.new(gpu)
+    polaris.log("New tty instance for screen " .. tostring(gpu.getScreen()))
     local self = {
         gpu = gpu,
 

@@ -27,6 +27,7 @@ end
 
 local function initShell()
     console:write("Init console loaded\n")
+    polaris.log("Init console loaded")
     while true do
         console:write("> ")
         console:flush()

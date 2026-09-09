@@ -5,7 +5,7 @@
 -- Finally added fs + real buffer library
 
 local filesystem = require("filesystem")
-local buffer = require("buffer")
+local buffer = polaris.buffer
 
 local io = {}
 

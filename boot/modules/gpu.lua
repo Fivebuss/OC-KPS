@@ -1,6 +1,6 @@
 local w, h
 local screen = component.list("screen", true)()
-local gpu = screen and component.list("gpu", true)()
+local gpu = screen and component.list("gpu", true)() -- Random gpu for now!
 
 if gpu then
     gpu = component.proxy(gpu)

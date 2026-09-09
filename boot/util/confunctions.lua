@@ -92,10 +92,29 @@ return {
 
     shutdown = function(cenv)
         polaris.call("shutdown")
-        console:write("\n")
+        --console:write("\n")
+    end,
+
+    reboot = function(cenv)
+        polaris.call("reboot")
+        --console:write("\n")
     end,
 
     assert = function(cenv)
         assert(false)
+    end,
+
+    clock = function(cenv)
+        console:write(os.clock())
+    end,
+
+    log = function(cenv)
+        console:write(tostring(polaris.log))
+    end,
+
+    modules = function(cenv)
+        for index, module in pairs(polaris.loadedModules) do
+            console:write(tostring(index) .. "  " .. tostring(module) .. "\n")
+        end
     end,
 }
