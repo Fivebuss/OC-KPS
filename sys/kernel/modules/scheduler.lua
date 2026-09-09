@@ -316,7 +316,7 @@ end
 -- Cleans up all handlers
 function scheduler.cleanup(event)
     for id, _ in pairs(handlers) do
-        event.removeHandler(id)
+        event.cancel(id)
     end
     handlers = {}
 end
@@ -324,7 +324,7 @@ end
 -- Kills off a handler
 function scheduler.deinit(event, handlerId)
     if handlerId and handlers[handlerId] then
-        event.removeHandler(handlerId)
+        event.cancel(handlerId)
         handlers[handlerId] = nil
     end
 end
@@ -412,7 +412,7 @@ function scheduler.init(event, tickInterval)
     checkArg(2, tickInterval, "number", "nil")
 
     local interval = tickInterval or 0.1
-    local handlerId = event.addHandler(tick, interval)
+    local handlerId = event.timer(interval, tick, math.huge)
 
     -- Allowing multiple (in theory)
     handlers[handlerId] = interval

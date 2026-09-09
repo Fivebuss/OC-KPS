@@ -98,7 +98,6 @@ end
 
 
 function tty.new(gpu)
-    polaris.log("New tty instance for screen " .. tostring(gpu.getScreen()))
     local self = {
         gpu = gpu,
 
@@ -652,19 +651,19 @@ function tty.new(gpu)
         return line
     end
 
-    -- Uses mineOS's event library
+    -- A better event library
 
-    self.keyHandlerId = event.addHandler(function(sig, _addr, char, code)
+    self.keyHandlerId = event.register(nil, function(sig, _addr, char, code)
         if sig == "key_down" then
             self:onKeyDown(char, code)
         elseif sig == "clipboard" then
             self:clipboard(code) -- clipboard signal's 3rd value is the pasted text
         end
-    end)
+    end, math.huge, math.huge)
 
     function self:close()
         self:flush()
-        event.removeHandler(self.keyHandlerId)
+        event.cancel(self.keyHandlerId)
         self.writer:close()
         return true
     end

@@ -76,19 +76,19 @@ return {
 
     -- Gets event handlers
     handlers = function(cenv)
-        local i = 0
-        for handler in pairs(event.getHandlers()) do
-            i = i + 1
+        for id, handler in pairs(event.getHandlers()) do
             console:write(string.format(
-                "[%d] callback=%s interval=%s times=%s next=%.3f\n",
-                i,
+                "[%d] key=%s callback=%s interval=%s times=%s next=%.3f\n",
+                id,
+                tostring(handler.key),
                 tostring(handler.callback),
                 tostring(handler.interval),
                 tostring(handler.times),
-                handler.nextTriggerTime
+                handler.timeout
             ))
         end
     end,
+
 
     shutdown = function(cenv)
         polaris.call("shutdown")

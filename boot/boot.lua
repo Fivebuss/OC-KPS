@@ -116,6 +116,4 @@ end
 -- Tell the system that initialization is complete.
 computer.pushSignal("init")
 -- Enter scheduler loop
-while true do
-    event.pull()
-end
+event.pull("init", 1)

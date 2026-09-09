@@ -185,6 +185,41 @@ function filesystem.mount(fs, path)
   return true
 end
 
+function filesystem.unmount(path)
+  checkArg(1, path, "string")
+
+  local real, reason = filesystem.realPath(path)
+  if not real then
+    return nil, reason
+  end
+
+  if real == "/" then
+    return nil, "cannot unmount root filesystem"
+  end
+
+  local fsnode = fstab[real]
+  if not fsnode then
+    return nil, "no filesystem mounted here"
+  end
+
+  -- Nested
+  local prefix = real == "/" and "/" or real .. "/"
+  for mountPath in pairs(fstab) do
+    if mountPath ~= real and mountPath:sub(1, #prefix) == prefix then
+      return nil, "filesystem has mounted children"
+    end
+  end
+
+  fstab[real] = nil
+
+  local parent = fsnode.parent
+  if parent and parent.children[fsnode.name] == fsnode then
+    parent.children[fsnode.name] = nil
+  end
+
+  return true
+end
+
 function filesystem.path(path)
   local parts = segments(path)
   local result = table.concat(parts, "/", 1, #parts - 1) .. "/"
