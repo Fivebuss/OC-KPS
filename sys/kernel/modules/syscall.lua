@@ -76,4 +76,21 @@ polaris.syscalls.reboot = function(ctx)
     computer.shutdown(1)
 end
 
+-- Custom PGIDs
+polaris.syscalls.setpgid = function(ctx, pid, gid)
+    local process = polaris.process
+    local targetPid = pid or (ctx and ctx.caller)
+
+    if targetPid == nil then
+        error("setpgid: no pid given and no caller context", 0)
+    end
+
+    local ok, resultGid = process.setGroupPriv(targetPid, gid)
+    if not ok then
+        error("setpgid: " .. tostring(resultGid or "failed"), 0)
+    end
+
+    return resultGid
+end
+
 return call

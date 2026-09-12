@@ -1,3 +1,5 @@
+-- /sys/kernel/modules/scheduler.lua
+
 -- A bad lua scheduler I wrote like 3 showers ago
 -- Ported from MShell lol
 

@@ -1,6 +1,7 @@
 -- Polaris config at /boot/kconfig.cfg
 
 -- Loads a file! Dangerous! However its used once and an insecure environment still
+-- And this entire system is far, far due a re-do
 ---@diagnostic disable: lowercase-global
 
 polaris = polaris or {}

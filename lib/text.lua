@@ -369,6 +369,7 @@ function text.internal.normalize(words, omitQuotes)
     local norm = {}
 
     for _, part in ipairs(word) do
+---@diagnostic disable-next-line: cast-local-type
       norm = tx.concat(
         norm,
         not omitQuotes and part.qr
