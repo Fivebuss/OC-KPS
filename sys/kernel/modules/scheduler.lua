@@ -142,6 +142,8 @@ function scheduler.spawn(fn, onExit, label)
         resumeVal = nil,
         onExit = onExit,
         cancelled = false,
+        exiting = false,
+        exitCode = nil,
         pendingSignal = nil,
         label = label or "?",
         spawnedAt = computer_uptime(),
@@ -211,6 +213,7 @@ function scheduler.stop(uid)
     end
     return true
 end
+
 -- Continue normally
 function scheduler.cont(uid)
     local t = threads[uid]
@@ -230,6 +233,7 @@ function scheduler.isStopped(uid)
     local t = threads[uid or activeUid]
     return t ~= nil and t.stopped or false
 end
+
 -- Makes a corountine die
 function scheduler.kill(uid)
     local t = threads[uid]
@@ -258,6 +262,38 @@ function scheduler.cancel(uid)
     t.cancelled = true
 
     -- Wake up!
+    if t.wakeAt ~= nil then
+        t.wakeAt = 0
+    end
+
+    -- Unblock input
+    if t.waiting then
+        t.waiting = false
+        t.hasResume = true
+        t.resumeVal = nil
+    end
+
+    return true
+end
+
+-- Exit codes
+function scheduler.exit(code)
+    checkArg(1, code, "number", "nil")
+    if code == nil or code < 0 or code > 255 then
+        code = 0
+    end
+
+    local uid = activeUid
+    local t = threads[uid]
+
+    if not t or t.exiting then
+        return false
+    end
+
+    t.exiting = true
+    t.exitCode = code
+
+    -- Wake up if sleeping
     if t.wakeAt ~= nil then
         t.wakeAt = 0
     end
@@ -364,10 +400,16 @@ local function tick(...)
                 activeUid = nil
 
                 -- thread might have been killed by itself or another thread
-                -- mid-resume (e.g. via onExit callback re-entrancy); make sure
-                -- it's still registered before touching it further
+                -- mid-resume
                 if thr[uid] ~= t then
                     -- gone already, nothing more to do
+                elseif t.exiting then
+                    thr[uid] = nil
+                    threadCount = threadCount - 1
+
+                    if t.onExit then
+                        t.onExit(true, t.exitCode)
+                    end
                 elseif not ok then
                     thr[uid] = nil
                     threadCount = threadCount - 1

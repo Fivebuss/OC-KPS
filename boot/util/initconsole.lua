@@ -8,6 +8,14 @@ polaris.config["tty.profile"] = 7
 _G.console = polaris.tty.new(gpu)
 local isDebug = false
 
+-- mmmm braille trick
+--console:setCursorShape("braille")
+
+-- Dont need them
+console.disabled.C = true
+console.disabled.D = true
+console.disabled.Z = true
+
 local ok, commands = pcall(require, "/boot/util/confunctions")
 if not ok then
     error("initconsole: failed to load confunctions.lua: " .. tostring(commands))
@@ -26,14 +34,15 @@ if not isDebug then
 end
 
 local function initShell()
+    console:clear()
     console:write("Init console loaded\n")
-    polaris.log("Init console loaded")
+
+    local stdin = io.input(scheduler)
+
     while true do
         console:write("> ")
         console:flush()
 
-        -- Get stdin for the current thread and read
-        local stdin = io.input(scheduler)
         local line = stdin:readLine()
 
         if not line then
@@ -41,7 +50,6 @@ local function initShell()
             return
         end
 
-        -- Get rid of line end
         line = line:gsub("[\r\n]", "")
 
         local command = commands[line]
@@ -49,15 +57,18 @@ local function initShell()
         if command then
             command(cenv)
         else
-            io.write(scheduler, "unknown command: ", line, "\n")
+            console:write("unknown command: ", line, "\n")
         end
-        console:flush()
     end
 end
 
 local shellUid
 shellUid = scheduler.spawn(initShell, function(success, reason)
     assert(success, reason)
+    console:write("Console exit\n")
+    computer.beep(2000)
+    computer.beep(2000)
+    computer.beep(2000)
     io.cleanupThread(shellUid)
 end, "init_console")
 

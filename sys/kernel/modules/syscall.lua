@@ -76,8 +76,4 @@ polaris.syscalls.reboot = function(ctx)
     computer.shutdown(1)
 end
 
-polaris.syscalls.assert = function(ctx)
-    assert(ctx[1], ctx[2])
-end
-
 return call

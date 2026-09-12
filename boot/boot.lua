@@ -104,15 +104,6 @@ for file in filesystem.list("/boot") do
     end
 end
 
-if polaris.config["initConsole"] == true then
-    if package.loaded["sys.kernel.modules.tty"] ~= nil then
-        dofile("/boot/util/initconsole.lua")
-        console:write("Entering init console\n")
-    else
-        status("Initconsole failed to load: No tty")
-    end
-end
-
 -- Tell the system that initialization is complete.
 computer.pushSignal("init")
 -- Enter scheduler loop

@@ -48,7 +48,7 @@ local color_profiles = {
         0x434758, 0xff8b92, 0xddffa7, 0xffe585,
         0x9cc4ff, 0xe1acff, 0xa3f7ff, 0xffffff,
     },
-    {         -- MShell pallete
+    {             -- MShell pallete
         0x000000, -- black              Background
         0xFF5555, -- red                Error
         0x55FF55, -- green              Success
@@ -70,6 +70,19 @@ local color_profiles = {
 
 local len = unicode.len
 local usub = unicode.sub
+
+local function brailleChar(a, b, c, d, e, f, g, h)
+    return unicode.char(10240 + 128 * h + 64 * g + 32 * f + 16 * d + 8 * b + 4 * e + 2 * c + a)
+end
+
+-- Snatched my glyph renderer trick
+local cursorShapes = {
+    invert = function() return nil end,
+    block = function() return "█" end,
+    braille = function() return brailleChar(1, 1, 1, 1, 1, 1, 1, 1) end,
+    underline = function() return "▁" end,
+    bar = function() return "▏" end,
+}
 
 -- From front pop
 local function pop(str, n, u)
@@ -109,6 +122,21 @@ function tty.new(gpu)
         esc = "",
         cx = 1,
         cy = 1,
+
+        -- Cursor is now a proper table, x/y/row/col are seperate for readline shenanigans
+        cursor = {
+            x = 1,
+            y = 1,
+            row = 1,
+            col = 1,
+            shape = "invert",
+            enabled = true,
+            visible = true,
+            follow = true,  -- if true x/y follows cx/cy
+            blink = true,
+            blinkOn = true, -- Is it on?
+        },
+
         fg = 7,
         bg = 0,
         fgp = true,
@@ -152,6 +180,12 @@ function tty.new(gpu)
 
     -- Utils are basically 1:1
 
+    -- Remove snapshot of contents
+    local function removeCshot(t)
+        t.cursorSaved = nil
+    end
+    self.removeCshot = removeCshot
+
     local function wrap_cursor(t)
         while t.cx > t.w do
             t.cx, t.cy = math.max(1, t.cx - t.w), t.cy + 1
@@ -161,16 +195,26 @@ function tty.new(gpu)
         end
         while t.cy < 1 do
             t.cy = t.cy + 1
+            removeCshot(t)
             t.gpu.copy(1, 1, t.w, t.h - 1, 0, 1)
             t.gpu.fill(1, 1, t.w, 1, " ")
         end
         while t.cy > t.h do
             t.cy = t.cy - 1
+            removeCshot(t)
             t.gpu.copy(1, 2, t.w, t.h, 0, -1)
             t.gpu.fill(1, t.h, t.w, 1, " ")
         end
     end
     self.wrap_cursor = wrap_cursor
+
+    -- Duh
+    local function syncCursor(t)
+        if t.cursor.follow then
+            t.cursor.x, t.cursor.y = t.cx, t.cy
+        end
+    end
+    self.syncCursor = syncCursor
 
     local function writeline(t, rline)
         local wrapped = false
@@ -210,13 +254,22 @@ function tty.new(gpu)
     local commands, control = {}, {}
     local separators = { standard = "[", control = "?" }
 
-    function commands.A(t, args) t.cy = t.cy - math.max(args[1] or 0, 1) end
+    -- Wrap cursor
+    function commands.A(t, args)
+        t.cy = t.cy - math.max(args[1] or 0, 1); wrap_cursor(t)
+    end
 
-    function commands.B(t, args) t.cy = t.cy + math.max(args[1] or 0, 1) end
+    function commands.B(t, args)
+        t.cy = t.cy + math.max(args[1] or 0, 1); wrap_cursor(t)
+    end
 
-    function commands.C(t, args) t.cx = t.cx + math.max(args[1] or 0, 1) end
+    function commands.C(t, args)
+        t.cx = t.cx + math.max(args[1] or 0, 1); wrap_cursor(t)
+    end
 
-    function commands.D(t, args) t.cx = t.cx - math.max(args[1] or 0, 1) end
+    function commands.D(t, args)
+        t.cx = t.cx - math.max(args[1] or 0, 1); wrap_cursor(t)
+    end
 
     function commands.g(t, args)
         if #args < 1 then return end
@@ -228,6 +281,7 @@ function tty.new(gpu)
             t.gpu.fill(args[1], args[2], args[3], args[4], " ")
         elseif cmd == 1 then
             if #args < 6 then return end
+            t.cursorSaved = nil -- fix relocate
             t.gpu.copy(args[1], args[2], args[3], args[4], args[5], args[6])
         end
     end
@@ -322,12 +376,14 @@ function tty.new(gpu)
 
     function commands.S(t, args)
         local n = args[1] or 1
+        t.cursorSaved = nil
         t.gpu.copy(1, n, t.w, t.h, 0, -n)
         t.gpu.fill(1, t.h - n, t.w, n, " ")
     end
 
     function commands.T(t, args)
         local n = args[1] or 1
+        t.cursorSaved = nil
         t.gpu.copy(1, 1, t.w, t.h - n, 0, n)
         t.gpu.fill(1, 1, t.w, n, " ")
     end
@@ -389,21 +445,105 @@ function tty.new(gpu)
 
     -- Shoves concat into this but otherwise is same
 
-    function self:write_str(str)
+    -- What was under the cursor?
+    self.cursorSaved = nil -- {x, y, char, fg, bg, fgp, bgp}
+
+    -- Restores contents
+    local function eraseCursor(t)
+        local saved = t.cursorSaved
+        if not saved then return end
+
+        t.cursorSaved = nil
+
+        t.gpu.setForeground(saved.fg, saved.fgp)
+        t.gpu.setBackground(saved.bg, saved.bgp)
+        t.gpu.set(saved.x, saved.y, saved.char)
+
+        t.gpu.setForeground(t.fg, t.fgp)
+        t.gpu.setBackground(t.bg, t.bgp)
+    end
+    self.eraseCursor = eraseCursor
+
+    -- Draw the cursor
+    local function drawCursor(t)
+        local cur = t.cursor
+        if not cur.enabled or not cur.visible then return end
+
+        local shapeFn = cursorShapes[cur.shape] or cursorShapes.invert
+        local glyph = shapeFn()
+
+        local c, f, b, pf, pb = t.gpu.get(cur.x, cur.y)
+
+        -- pallete index? tf?
+        local savedFg = pf ~= nil and pf or f
+        local savedBg = pb ~= nil and pb or b
+        local savedFgp = pf ~= nil
+        local savedBgp = pb ~= nil
+
+        t.cursorSaved = {
+            x = cur.x,
+            y = cur.y,
+            char = c,
+            fg = savedFg,
+            bg = savedBg,
+            fgp = savedFgp,
+            bgp = savedBgp
+        }
+
+        if glyph then
+            t.gpu.setForeground(t.fg, t.fgp)
+            t.gpu.setBackground(t.bg, t.bgp)
+            t.gpu.set(cur.x, cur.y, glyph)
+        else
+            -- Invert
+            t.gpu.setForeground(savedBg, savedBgp)
+            t.gpu.setBackground(savedFg, savedFgp)
+            t.gpu.set(cur.x, cur.y, c)
+        end
+
+        -- Restore
+        t.gpu.setForeground(t.fg, t.fgp)
+        t.gpu.setBackground(t.bg, t.bgp)
+    end
+    self.drawCursor = drawCursor
+
+    function self:tickBlink()
+        if not self.cursor.blink then return end
+        self.cursor.blinkOn = not self.cursor.blinkOn
+        if self.attributes.cursor then eraseCursor(self) end
+        self.cursor.visible = self.cursor.blinkOn
+        if self.attributes.cursor and self.cursor.visible then drawCursor(self) end
+    end
+
+    function self:setCursorBlink(enabled)
+        self.cursor.blink = enabled ~= false
+        if not self.cursor.blink then
+            self.cursor.blinkOn = true
+            if self.attributes.cursor then eraseCursor(self) end
+            self.cursor.visible = true
+            if self.attributes.cursor then drawCursor(self) end
+        end
+    end
+
+    -- annoyinf
+    local function breakPendingLine(t)
+        if #t.rb > 0 and t.attributes.echo and not t.attributes.raw then
+            t.cx, t.cy = 1, t.cy + 1
+            wrap_cursor(t)
+            syncCursor(t)
+        end
+    end
+    self.breakPendingLine = breakPendingLine
+
+    function self:write_str(str, isEcho)
         local gpu = self.gpu
 
+        if not isEcho then
+            breakPendingLine(self)
+        end
+
         if self.attributes.cursor then
-            local c, f, b, pf, pb = gpu.get(self.cx, self.cy)
-            if pf then
-                gpu.setForeground(pb, true)
-                gpu.setBackground(pf, true)
-            else
-                gpu.setForeground(b)
-                gpu.setBackground(f)
-            end
-            gpu.set(self.cx, self.cy, c)
-            gpu.setForeground(self.fg, self.fgp)
-            gpu.setBackground(self.bg, self.bgp)
+            eraseCursor(self)
         end
 
         str = str:gsub("\t", "  ")
@@ -434,6 +574,7 @@ function tty.new(gpu)
                         control[code](self, args)
                     end
                     wrap_cursor(self)
+                    syncCursor(self)
                 end
             else
                 if str:find("\a") then
@@ -456,20 +597,17 @@ function tty.new(gpu)
             end
         end
 
+        syncCursor(self)
+
+        if not isEcho and #self.rb > 0 and self.attributes.echo and not self.attributes.raw then
+            -- Redraw
+            rawwrite(self, self.rb)
+            wrap_cursor(self)
+            syncCursor(self)
+        end
+
         if self.attributes.cursor then
-            local c, f, b, pf, pb = gpu.get(self.cx, self.cy)
-            if pf then
-                gpu.setForeground(pb, true)
-                gpu.setBackground(pf, true)
-            else
-                gpu.setForeground(b)
-                gpu.setBackground(f)
-            end
-            gpu.set(self.cx, self.cy, c)
-            if pf then
-                gpu.setForeground(self.fg, self.fgp)
-                gpu.setBackground(self.bg, self.bgp)
-            end
+            drawCursor(self)
         end
 
         return true
@@ -515,6 +653,73 @@ function tty.new(gpu)
         self.wb = ""
         self.gpu.fill(1, 1, self.w, self.h, " ")
         self.cx, self.cy = 1, 1
+        self.cursorSaved = nil
+        syncCursor(self)
+    end
+
+    -- Cursor stuff
+
+    -- Sets the glyph used to render the cursor
+    function self:setCursorShape(shape)
+        if self.attributes.cursor then eraseCursor(self) end
+        self.cursor.shape = cursorShapes[shape] and shape or "invert"
+        if self.attributes.cursor then drawCursor(self) end
+    end
+
+    function self:getCursorShape()
+        return self.cursor.shape
+    end
+
+    function self:registerCursorShape(name, fn)
+        cursorShapes[name] = fn
+    end
+
+    -- Set cursor (Not write pos)
+    function self:setCursorPos(x, y)
+        if self.attributes.cursor then eraseCursor(self) end
+        self.cursor.follow = false
+        self.cursor.x, self.cursor.y = x, y
+        if self.attributes.cursor then drawCursor(self) end
+    end
+
+    -- Same
+    function self:setCursorRowCol(row, col, toScreen)
+        self.cursor.row, self.cursor.col = row, col
+        if toScreen then
+            local x, y = toScreen(row, col)
+            self:setCursorPos(x, y)
+        end
+    end
+
+    -- Sync
+    function self:setCursorFollow(enabled)
+        self.cursor.follow = enabled ~= false
+        if self.cursor.follow then
+            syncCursor(self)
+        end
+    end
+
+    function self:setCursorVisible(visible)
+        if self.attributes.cursor then eraseCursor(self) end
+        self.cursor.visible = visible ~= false
+        if self.attributes.cursor and self.cursor.visible then drawCursor(self) end
+    end
+
+    function self:getCursorVisible()
+        return self.cursor.visible
+    end
+
+    -- I think the ansi code still works
+    function self:setCursor(enabled)
+        enabled = enabled ~= false
+        if self.attributes.cursor and not enabled then eraseCursor(self) end
+        self.attributes.cursor = enabled
+        self.cursor.enabled = enabled
+        if enabled then drawCursor(self) end
+    end
+
+    function self:getCursor()
+        return self.attributes.cursor
     end
 
     -- Calling this just registers with a uid instead
@@ -583,7 +788,7 @@ function tty.new(gpu)
             elseif ch == 8 then
                 if #self.rb > 0 then
                     tw = "\27[D \27[D"
-                    self.rb = self.rb:sub(1, -2)
+                    self.rb = usub(self.rb, 1, len(self.rb) - 1)
                 else
                     tw = ""
                 end
@@ -592,7 +797,7 @@ function tty.new(gpu)
         end
 
         if self.attributes.echo and not self.attributes.xoff then
-            self:write_str(tw or "")
+            self:write_str(tw or "", true)
         end
 
         if not self.attributes.xoff then
@@ -661,9 +866,12 @@ function tty.new(gpu)
         end
     end, math.huge, math.huge)
 
+    self.blinkTimerId = event.timer(0.5, function() self:tickBlink() end, math.huge)
+
     function self:close()
         self:flush()
         event.cancel(self.keyHandlerId)
+        event.cancel(self.blinkTimerId)
         self.writer:close()
         return true
     end

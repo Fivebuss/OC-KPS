@@ -1,8 +1,10 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
 
-
+-- Global
 event = require("sys.kernel.modules.event")
+component = require("component")
+local package = require("package")
 
 polaris = {}   -- global
 polaris.version = {}
@@ -44,35 +46,13 @@ log("Registered module: syscall")
 polaris.tty = require("sys.kernel.modules.tty")
 log("Registered module: tty")
 
--- Extending functionality for stuff
-
--- Search by prefix
-function package.loadedNames(prefix)
-  checkArg(1, prefix, "string")
-
-  local result = {}
-
-  for name in pairs(package.loaded) do
-    if name == prefix or name:sub(1, #prefix + 1) == prefix .. "." then
-      table.insert(result, name)
-    end
-  end
-
-  return result
+-- Component stuff
+for c, t in component.list() do
+  computer.pushSignal("component_added", c, t)
 end
+dofile("sys/kernel/modules/component.lua")
+package.loaded["sys.kernel.modules.component"] = component
+log("Registered module: component")
 
-polaris.loadedModules = package.loadedNames("sys")
-
--- Replace os.sleep
-function os.sleep(n)
-  checkArg(1, n, "number")
-  if polaris.scheduler.currentThread() then
-    polaris.scheduler.sleep(seconds)
-  else
-    error("os.sleep called outside a scheduler thread")
-  end
-
-  return true
-end
 
 return ("Polaris " .. polaris.version.kernel .. " loaded")

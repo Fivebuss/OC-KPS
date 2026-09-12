@@ -100,10 +100,6 @@ return {
         --console:write("\n")
     end,
 
-    assert = function(cenv)
-        assert(false)
-    end,
-
     clock = function(cenv)
         console:write(os.clock())
     end,
@@ -115,6 +111,44 @@ return {
     modules = function(cenv)
         for index, module in pairs(polaris.loadedModules) do
             console:write(tostring(index) .. "  " .. tostring(module) .. "\n")
+        end
+    end,
+
+    colors = function(cenv)
+        local colors = {
+            -- Foreground
+            { 30, "Black" },
+            { 31, "Red" },
+            { 32, "Green" },
+            { 33, "Yellow" },
+            { 34, "Blue" },
+            { 35, "Magenta" },
+            { 36, "Cyan" },
+            { 37, "White" },
+
+            -- Bright
+            { 90, "Bright Black" },
+            { 91, "Bright Red" },
+            { 92, "Bright Green" },
+            { 93, "Bright Yellow" },
+            { 94, "Bright Blue" },
+            { 95, "Bright Magenta" },
+            { 96, "Bright Cyan" },
+            { 97, "Bright White" },
+
+            -- Background
+            { 40, "Black BG" },
+            { 41, "Red BG" },
+            { 42, "Green BG" },
+            { 43, "Yellow BG" },
+            { 44, "Blue BG" },
+            { 45, "Magenta BG" },
+            { 46, "Cyan BG" },
+            { 47, "White BG" },
+        }
+
+        for _, color in ipairs(colors) do
+            console:write(string.format("\27[%dm%s\27[0m\n", color[1], color[2]))
         end
     end,
 }
