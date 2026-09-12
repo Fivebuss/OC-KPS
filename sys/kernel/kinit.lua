@@ -28,11 +28,16 @@ polaris.scheduler.interval = interval
 
 polaris.scheduler.handler = polaris.scheduler.init(event, interval)
 
+-- Process management: owns per-process (scheduler uid) stdio, and will
+-- later own i/o routing between processes, child tracking, and signal
+-- propagation. Needs scheduler + io, so load it after both.
+polaris.process = require("sys.kernel.modules.process")
+
 --- Logging
 polaris.log = require("sys.kernel.modules.log")
 local function log(...) polaris.log(...) end
 log("log initialized for " .. tostring(polaris.version.kernel))
-log("Registered base modules: buffer, io, config, scheduler, log")
+log("Registered base modules: buffer, io, process, config, scheduler, log")
 
 -- Spawn kernel thread
 dofile("/sys/kernel/kernel.lua")

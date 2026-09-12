@@ -22,25 +22,24 @@ return {
 
     -- Poor mans ps
     threads = function(cenv)
-        local count = cenv.scheduler.threadCount() or "Unknown"
-        local active = cenv.scheduler.activeThread() or "Unknown"
-        local tickInterval = polaris.scheduler.interval or "Unknown"
-        local infotable = cenv.scheduler.list()
+        local tickInterval = polaris.config["interval"] or "Unknown"
+        local infotable = cenv.process.list()
 
-        console:write("Polaris scheduler:\nTick Interval: " ..
-            tickInterval .. "\nCount: " .. count .. "\nactive thread uid: " .. active .. "\nInfo:\n")
+        console:write("Polaris process table:\nTick Interval: " ..
+            tostring(tickInterval) .. "\nCount: " .. #infotable .. "\nInfo:\n")
         for _, t in ipairs(infotable) do
             console:write(
                 string.format(
-                    "UID=%s label=%s status=%s waiting=%s sleeping=%s cancelled=%s stopped=%s age=%.2f\n",
-                    tostring(t.uid),
-                    t.label,
-                    t.status,
+                    "PID=%s PPID=%s cmd=%s status=%s waiting=%s sleeping=%s cancelled=%s stopped=%s age=%.2f\n",
+                    tostring(t.pid),
+                    tostring(t.ppid),
+                    tostring(t.cmd),
+                    tostring(t.status),
                     tostring(t.waiting),
                     tostring(t.sleeping),
                     tostring(t.cancelled),
                     tostring(t.stopped),
-                    t.age
+                    t.age or 0
                 )
             )
         end

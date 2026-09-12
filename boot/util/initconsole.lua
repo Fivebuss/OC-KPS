@@ -1,7 +1,8 @@
 -- /boot/util/initconsole.lua
 -- Basic shell for testing and if it cant reach further down boot
 
-local scheduler = polaris.scheduler
+-- I hope this works
+local process = polaris.process
 local io = require("sys.kernel.modules.io")
 
 polaris.config["tty.profile"] = 7
@@ -23,7 +24,7 @@ end
 
 local cenv = {
     io = io,
-    scheduler = scheduler,
+    process = process,
     console = console,
     debug = polaris.config["debug"],
     config = polaris.config,
@@ -37,7 +38,7 @@ local function initShell()
     console:clear()
     console:write("Init console loaded\n")
 
-    local stdin = io.input(scheduler)
+    local stdin = process.input()
 
     while true do
         console:write("> ")
@@ -62,20 +63,23 @@ local function initShell()
     end
 end
 
-local shellUid
-shellUid = scheduler.spawn(initShell, function(success, reason)
-    assert(success, reason)
-    console:write("Console exit\n")
-    computer.beep(2000)
-    computer.beep(2000)
-    computer.beep(2000)
-    io.cleanupThread(shellUid)
-end, "init_console")
+local shellPid
+shellPid = process.spawn(initShell, {
+    label = "init_console",
+    onExit = function(success, reason)
+        assert(success, reason)
+        console:write("Console exit\n")
+        computer.beep(2000)
+        computer.beep(2000)
+        computer.beep(2000)
+        process.destroy(shellPid)
+    end,
+})
 
 -- stdin isnt used really
-io.initThread(shellUid, console.reader, console, console)
+process.create(shellPid, console.reader, console, console)
 
 -- Register this thread as the "owner" of the console
 if console.attach then
-    console:attach(shellUid)
+    console:attach(shellPid)
 end

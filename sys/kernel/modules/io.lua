@@ -115,6 +115,11 @@ end
 
 io.newDescriptor = newDescriptor
 
+-- metatables
+function io.isDescriptor(v)
+    return getmetatable(v) == descriptorMt
+end
+
 
 -- Filesystem operations
 local fsStreamMt = { __index = {} }
@@ -579,99 +584,9 @@ end
 
 io.newLineBuffered = newLineBuffered
 
--- Each thread gets this
-
-local threadIO = {} -- [threadUid] = { [0]=stdin, [1]=stdout, [2]=stderr }
-
--- Pipeline stuff
--- stdin/stdout/stderr are raw streams
--- stdin is fully buffered, stdout and err are line-buffered!
-function io.initThread(uid, stdin, stdout, stderr)
-    threadIO[uid] = {
-        [0] = newDescriptor(buffer.new("r", stdin)),
-        [1] = newDescriptor(newLineBuffered(buffer.new("w", stdout))),
-        [2] = newDescriptor(newLineBuffered(buffer.new("w", stderr))),
-    }
-end
-
-function io.cleanupThread(uid)
-    io.closeAll(uid)
-    threadIO[uid] = nil
-end
-
-local function currentIO(scheduler)
-    local uid = scheduler.currentThread()
-    if not uid then
-        error("io must be used from within a running corountine: ", 2)
-    end
-    local t = threadIO[uid]
-    if not t then
-        error("io: no stream table for current thread", 2)
-    end
-    return t
-end
-
--- Omg streams
-function io.stream(scheduler, fd, file)
-    io.checkArg1(fd)
-    assert(fd == 0 or fd == 1 or fd == 2, "fd must be 0 (stdin), 1 (stdout), or 2 (stderr)")
-    local t = currentIO(scheduler)
-    if file then
-        local newDesc = getmetatable(file) == descriptorMt and file or newDescriptor(file)
-        local old = t[fd]
-        t[fd] = newDesc
-        if old then
-            old:release()
-        end
-    end
-    return t[fd]
-end
-
-function io.checkArg1(fd)
-    if type(fd) ~= "number" then
-        error("bad argument #1 (number expected, got " .. type(fd) .. ")", 3)
-    end
-end
-
-function io.input(scheduler, file)
-    return io.stream(scheduler, 0, file)
-end
-
-function io.output(scheduler, file)
-    return io.stream(scheduler, 1, file)
-end
-
-function io.error(scheduler, file)
-    return io.stream(scheduler, 2, file)
-end
-
-function io.write(scheduler, ...)
-    return io.output(scheduler):write(...)
-end
-
-function io.writeError(scheduler, ...)
-    local err = io.error(scheduler)
-    return err:write(...)
-end
-
--- Fixed
-function io.closeAll(uid)
-    local t = threadIO[uid]
-    if not t then return end
-    for fd = 0, 2 do
-        local desc = t[fd]
-        if desc then
-            desc:release()
-            t[fd] = nil
-        end
-    end
-end
-
 -- fd dupe
-local dupMt = descriptorMt
-
 function io.dup(descriptor)
-    assert(getmetatable(descriptor) == descriptorMt, "io.dup expects a descriptor (see io.stream/io.initThread)")
+    assert(getmetatable(descriptor) == descriptorMt, "io.dup expects a descriptor, with process.stream/process.create)")
     return descriptor:retain()
 end
 
@@ -700,7 +615,7 @@ local function unwrapStream(s)
     return s
 end
 
--- Get info passively
+-- It is now public so process can use it
 local function describeStream(desc)
     if not desc then
         return { present = false }
@@ -742,28 +657,6 @@ local function describeStream(desc)
     return info
 end
 
--- Copy of fd tables
-function io.listThreads()
-    local out = {}
-    for uid, fds in pairs(threadIO) do
-        out[uid] = {
-            [0] = describeStream(fds[0]),
-            [1] = describeStream(fds[1]),
-            [2] = describeStream(fds[2]),
-        }
-    end
-    return out
-end
-
--- Single thread data
-function io.describeThread(uid)
-    local fds = threadIO[uid]
-    if not fds then return nil end
-    return {
-        [0] = describeStream(fds[0]),
-        [1] = describeStream(fds[1]),
-        [2] = describeStream(fds[2]),
-    }
-end
+io.describeStream = describeStream
 
 return io

@@ -7,6 +7,9 @@ local event = require("sys.kernel.modules.event")
 local io = require("sys.kernel.modules.io")
 local computer = require("computer")
 
+-- Process does it's job
+local process = polaris.process
+
 local tty = {}
 
 -- I did change palletes tho
@@ -176,7 +179,7 @@ function tty.new(gpu)
     self.w, self.h = gpu.getResolution()
 
     -- Sure helps to have this i/o library
-    self.reader, self.writer = io.newPipeEndpoints(polaris.scheduler)
+    self.reader, self.writer = io.newPipeEndpoints(polaris.process)
 
     -- Utils are basically 1:1
 
@@ -739,9 +742,7 @@ function tty.new(gpu)
     -- Key handling is goofy with this event library. May change
     function self:onKeyDown(char, code)
         if char == 0 and code == 0 then return end
-        if self.attributes.xoff then return end
-
-        local scheduler = polaris.scheduler
+        if self.attributes.xoff then return end            
 
         local ch = char
         local outChar = aliases[code] or
@@ -770,7 +771,7 @@ function tty.new(gpu)
             local sig = sigacts[tch]
             if sig and not self.disabled[tch] and not self.attributes.raw then
                 for uid in pairs(self.attachedUids) do
-                    scheduler.signal(uid, sig)
+                    process.signal(uid, sig)
                 end
                 self.rb = ""
                 if tch == "D" then

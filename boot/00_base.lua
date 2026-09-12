@@ -1,5 +1,5 @@
 -- Extending functionality for stuff
-local scheduler = polaris.scheduler
+local process = polaris.process
 -- Search by prefix
 function package.loadedNames(prefix)
     checkArg(1, prefix, "string")
@@ -20,10 +20,10 @@ polaris.loadedModules = package.loadedNames("sys")
 -- Replace os.sleep
 function os.sleep(n)
     checkArg(1, n, "number")
-    if polaris.scheduler.currentThread() then
-        polaris.scheduler.sleep(seconds)
+    if process.self() then
+        process.sleep(n)
     else
-        error("os.sleep called outside a scheduler thread")
+        error("os.sleep called outside a process")
     end
 
     return true
@@ -34,7 +34,7 @@ function os.exit(code)
     if code == nil or code < 0 or code > 255 then
         code = 0
     end
-    scheduler.exit(code)
+    process.exit(code)
 end
 
 function os.execute(command)
