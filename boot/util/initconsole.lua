@@ -10,7 +10,7 @@ _G.console = polaris.tty.new(gpu)
 local isDebug = false
 
 -- mmmm braille trick
---console:setCursorShape("braille")
+console:setCursorShape("underline")
 
 -- Dont need them
 console.disabled.C = true

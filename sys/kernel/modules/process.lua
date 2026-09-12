@@ -58,6 +58,28 @@ local function scheduler()
     return polaris.scheduler
 end
 
+-- Show the kernel 
+local kernelRegistered = false
+
+local function isKernelPid(pid)
+    return pid ~= nil and pid == scheduler().kernelProcess
+end
+
+local function isKernel()
+    if kernelRegistered then return end
+
+    local kpid = scheduler().kernelProcess
+    if not kpid then return end
+
+    table_[kpid] = {
+        ppid = "bootloader",
+        cmd = "kernel",
+        spawnedAt = scheduler().info(kpid) and scheduler().info(kpid).spawnedAt or 0,
+    }
+
+    kernelRegistered = true
+end
+
 -- Parent? Maybe
 function process.spawn(fn, opts)
     checkArg(1, fn, "function")
@@ -88,11 +110,14 @@ function process.self()
 end
 
 function process.exists(pid)
+    isKernel()
     return table_[pid] ~= nil
 end
 
 -- PS table info
 function process.get(pid)
+    isKernel()
+
     local own = table_[pid]
     if not own then return nil end
 
@@ -104,6 +129,7 @@ function process.get(pid)
             ppid = own.ppid,
             cmd = own.cmd,
             spawnedAt = own.spawnedAt,
+            protected = isKernelPid(pid),
         }
     end
 
@@ -119,11 +145,14 @@ function process.get(pid)
         stopped = info.stopped,
         spawnedAt = info.spawnedAt,
         age = info.age,
+        protected = isKernelPid(pid),
     }
 end
 
 -- List PIDs
 function process.list()
+    isKernel()
+
     local out = {}
     for pid in pairs(table_) do
         out[#out + 1] = process.get(pid)
@@ -138,65 +167,99 @@ end
 
 -- Exit the active process from inside
 function process.exit(code)
+    if isKernelPid(process.self()) then return false end
     return scheduler().exit(code)
 end
 
 -- Kill
 function process.kill(pid)
+    if isKernelPid(pid) then return false end
+
     local ok = scheduler().kill(pid)
     if ok then forget(pid) end
     return ok
 end
 
 function process.killAll(exceptPid)
-    scheduler().killAll(exceptPid)
+    isKernel()
+
+    local kpid = scheduler().kernelProcess
+    local except = exceptPid
+    if except == nil then except = kpid end
+
+    scheduler().killAll(except)
+
     for pid in pairs(table_) do
-        if pid ~= exceptPid then forget(pid) end
+        if pid ~= except and not isKernelPid(pid) then
+            forget(pid)
+        end
     end
 end
 
 -- Ask nicely "please die"
 function process.cancel(pid)
+    if isKernelPid(pid) then return false end
     return scheduler().cancel(pid)
 end
 
 function process.cancelAll()
-    scheduler().cancelAll()
+    isKernel()
+
+    local kpid = scheduler().kernelProcess
+    for pid in pairs(table_) do
+        if pid ~= kpid then
+            scheduler().cancel(pid)
+        end
+    end
 end
 
 function process.isCancelled(pid)
+    if isKernelPid(pid) then return false end
     return scheduler().isCancelled(pid)
 end
 
 -- Check if it got told to die
 function process.checkCancel()
+    if isKernelPid(process.self()) then return end
     return scheduler().checkCancel()
 end
 
 -- Signal stuff
 
 function process.signal(pid, sig)
+    if isKernelPid(pid) then return false end
     return scheduler().signal(pid, sig)
 end
 
 function process.signalAll(sig)
-    return scheduler().signalAll(sig)
+    isKernel()
+
+    local kpid = scheduler().kernelProcess
+    for pid in pairs(table_) do
+        if pid ~= kpid then
+            scheduler().signal(pid, sig)
+        end
+    end
 end
 
 function process.pendingSignal(pid)
+    if isKernelPid(pid) then return nil end
     return scheduler().pendingSignal(pid)
 end
 
 -- ^Z / fg
 function process.stop(pid)
+    if isKernelPid(pid) then return false end
     return scheduler().stop(pid)
 end
 
 function process.cont(pid)
+    if isKernelPid(pid) then return false end
     return scheduler().cont(pid)
 end
 
 function process.isStopped(pid)
+    if isKernelPid(pid) then return false end
     return scheduler().isStopped(pid)
 end
 
@@ -234,8 +297,11 @@ end
 
 -- Closes fd 0/1/2 for pid without forgetting the entry
 function process.closeAll(pid)
+    if isKernelPid(pid) then return false end
+
     local t = processIO[pid]
     if not t then return end
+
     for fd = 0, 2 do
         local desc = t[fd]
         if desc then
@@ -247,6 +313,8 @@ end
 
 -- Obliterates fully
 function process.destroy(pid)
+    if isKernelPid(pid) then return false end
+
     process.closeAll(pid)
     processIO[pid] = nil
     forget(pid)
@@ -257,10 +325,12 @@ local function currentIO()
     if not pid then
         error("process: must be used from within a running process", 2)
     end
+
     local t = processIO[pid]
     if not t then
         error("process: no fd table for current process (pid " .. tostring(pid) .. ")", 2)
     end
+
     return t
 end
 
@@ -268,21 +338,26 @@ local function checkFd(fd)
     if type(fd) ~= "number" then
         error("bad argument #1 (number expected, got " .. type(fd) .. ")", 3)
     end
+
     assert(fd == 0 or fd == 1 or fd == 2, "fd must be 0 (stdin), 1 (stdout), or 2 (stderr)")
 end
 
 -- Get (or replace) a stream on current
 function process.stream(fd, file)
     checkFd(fd)
+
     local t = currentIO()
+
     if file then
         local newDesc = io.isDescriptor(file) and file or io.newDescriptor(file)
         local old = t[fd]
         t[fd] = newDesc
+
         if old then
             old:release()
         end
     end
+
     return t[fd]
 end
 
@@ -310,6 +385,7 @@ end
 function process.describe(pid)
     local fds = processIO[pid]
     if not fds then return nil end
+
     return {
         [0] = io.describeStream(fds[0]),
         [1] = io.describeStream(fds[1]),
