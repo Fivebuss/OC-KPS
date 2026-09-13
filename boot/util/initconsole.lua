@@ -6,7 +6,7 @@ local process = polaris.process
 local io = require("sys.kernel.modules.io")
 
 polaris.config["tty.profile"] = 7
-_G.console = polaris.tty.new(gpu)
+_G.console = polaris.tty.new(polaris.gpu)
 local isDebug = false
 
 -- mmmm braille trick

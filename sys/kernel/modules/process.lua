@@ -16,7 +16,7 @@ SIGCHLD is just a signal sent to a parent
 Can set a opts.onOrphaned to figure out if it's parent dies
 If a parent dies the kernel owns it
 
-Process groups are just custom because linux is freaky
+Process groups are just custom because linux is weird so we wont use theirs
   process.GROUP = {
     SYS     = 1, -- kernel lives here, you cannot touch it. Normally
     MISM    = 2, -- "mismanaged" yeah this is helpful for me, see below
@@ -40,7 +40,7 @@ Functions of this
   process.exists(pid): Does it?
   process.get(pid): copy of that processs table entry, or nil
   process.list(): copy of the whole process table ps style
-  process.exit(code): exit the CURRENT process
+  process.exit(code): exit the current process
   process.kill(pid): Kills a process without asking
   process.cancel(pid) / process.cancelAll(): ask nicely for one to die
   process.isCancelled(pid) / process.checkCancel(): checks if TERM

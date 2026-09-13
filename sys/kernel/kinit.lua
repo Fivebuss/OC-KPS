@@ -5,6 +5,7 @@
 event = require("sys.kernel.modules.event")
 component = require("component")
 local package = require("package")
+local filesystem = require("filesystem")
 
 polaris = {}   -- global
 polaris.version = {}
@@ -13,6 +14,10 @@ polaris.version.kernel = "Polaris Kernel 0.1"
 _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
+
+-- Yeah this is temporary
+polaris.gpu = gpu
+_G.gpu = nil
 -- Load config
 
 require("sys.kernel.modules.config")()
@@ -58,6 +63,11 @@ end
 dofile("sys/kernel/modules/component.lua")
 package.loaded["sys.kernel.modules.component"] = component
 log("Registered module: component")
+
+-- Mount tmp
+if computer.tmpAddress() then
+  filesystem.mount(computer.tmpAddress(), "/tmp")
+end
 
 
 return ("Polaris " .. polaris.version.kernel .. " loaded")

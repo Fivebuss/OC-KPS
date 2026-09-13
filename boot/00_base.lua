@@ -1,5 +1,8 @@
 -- Extending functionality for stuff
+-- And modifying global stuff
 local process = polaris.process
+polaris.env = require("sys.kernel.modules.env")
+
 -- Search by prefix
 function package.loadedNames(prefix)
     checkArg(1, prefix, "string")
@@ -37,6 +40,97 @@ function os.exit(code)
     process.exit(code)
 end
 
-function os.execute(command)
-    return "os.execute not implemented kernel-level"
+-- Does two things, destroys old managed _ENVs and it determines which one to copy
+do
+    local rawSpawn = process.spawn
+
+    function process.spawn(fn, opts)
+        checkArg(1, fn, "function")
+        checkArg(2, opts, "table", "nil")
+        opts = opts or {}
+
+        local userOnExit = opts.onExit
+        local wrapped = {}
+        for k, v in pairs(opts) do wrapped[k] = v end
+
+        -- Spawned in kernel so gets a modified _G
+        local parentEnv = process.self() and polaris.env.current() or polaris.env.new()
+
+        local pid
+        wrapped.onExit = function(success, reason, ...)
+            if pid then
+                polaris.env.destroy(pid)
+            end
+            if userOnExit then
+                userOnExit(success, reason, ...)
+            end
+        end
+
+        pid = rawSpawn(fn, wrapped)
+        polaris.env.forProcess(pid, parentEnv)
+        return pid
+    end
+end
+
+-- Lol reads the entire files contents
+local function readFile(path)
+    local filesystem = require("filesystem")
+    local file, reason = filesystem.open(path, "r")
+    if not file then
+        return nil, reason or ("cannot open " .. tostring(path))
+    end
+
+    local buffer = {}
+    while true do
+        local chunk = file:read(math.maxinteger or math.huge)
+        if not chunk then break end
+        buffer[#buffer + 1] = chunk
+    end
+    file:close()
+
+    return table.concat(buffer)
+end
+
+-- Now uses a _ENV
+function loadfile(path)
+    local buffer, reason = readFile(path)
+    if not buffer then
+        return nil, reason
+    end
+
+    local target = polaris.env.current()
+    local fn, err = target.load(buffer, "=" .. path, "bt")
+    if not fn then
+        return nil, err
+    end
+
+    return fn
+end
+
+function dofile(path)
+    local fn, err = loadfile(path)
+    if not fn then
+        error(err, 0)
+    end
+    return fn()
+end
+
+-- Just an alias really to process.spawn really
+function os.execute(path, opts)
+    checkArg(1, path, "string")
+    checkArg(2, opts, "table", "nil")
+
+    local buffer, reason = readFile(path)
+    if not buffer then
+        return nil, reason
+    end
+
+    return process.spawn(function()
+        local env = polaris.env.current()
+        local fn, err = env.load(buffer, "=" .. path, "bt")
+        if not fn then
+            error(err, 0)
+        end
+        return fn()
+    end, opts)
 end

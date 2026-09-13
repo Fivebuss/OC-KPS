@@ -76,6 +76,39 @@ polaris.syscalls.reboot = function(ctx)
     computer.shutdown(1)
 end
 
+-- Runs a file in a managed _ENV
+polaris.syscalls.execute = function(ctx, path, env)
+    local caller = ctx and ctx.caller
+
+    if env == nil then
+        if not caller then
+            error("execute: no env provided", 0)
+        end
+        env = polaris.env.forProcess(caller)
+    end
+
+    local filesystem = require("filesystem")
+    local file, reason = filesystem.open(path, "r")
+    if not file then
+        return nil, reason or ("cannot open " .. tostring(path))
+    end
+
+    local buffer = {}
+    while true do
+        local chunk = file:read(math.maxinteger or math.huge)
+        if not chunk then break end
+        buffer[#buffer + 1] = chunk
+    end
+    file:close()
+
+    local fn, err = env.load(table.concat(buffer), "=" .. path, "bt")
+    if not fn then
+        return nil, err
+    end
+
+    return fn()
+end
+
 -- Custom PGIDs
 polaris.syscalls.setpgid = function(ctx, pid, gid)
     local process = polaris.process
