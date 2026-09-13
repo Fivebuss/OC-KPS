@@ -96,15 +96,22 @@ status("Executing stage 2 boot")
 
 -- Now that things have been prepared
 
+local bootScripts = {}
 for file in filesystem.list("/boot") do
     local path = "/boot/" .. file
     if file ~= "boot.lua" and not filesystem.isDirectory(path) then
-        status("> " .. file)
-        dofile(path)
+        table.insert(bootScripts, path)
     end
+end
+
+-- So they are in order
+table.sort(bootScripts)
+for i = 1, #bootScripts do
+    status("> " .. tostring(bootScripts[i]))
+    dofile(bootScripts[i])
 end
 
 -- Tell the system that initialization is complete.
 computer.pushSignal("init")
 -- Enter scheduler loop
-event.pull("init", 1)
+require("sys.kernel.modules.event").pull("init", 1)

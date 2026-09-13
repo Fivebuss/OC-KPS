@@ -30,6 +30,7 @@ scheduler.cancellAll(): Sends a signal to all corountines its time to die
 --]]
 
 local computer = require("computer")
+local event = require("sys.kernel.modules.event")
 local scheduler = {}
 local handlers = {}
 
@@ -39,6 +40,17 @@ scheduler.SIG = {
     TSTP = "TSTP", -- CTRL Z
     CONT = "CONT", -- Continued
     HUP  = "HUP",  -- Ctrl+D / hangup, kinda?
+    CHLD = "CHLD", -- A child died
+}
+
+-- Fixed the weird bug
+-- So a seperate table exists for this
+scheduler.sig = {}
+scheduler.sig.act = {
+    [scheduler.SIG.INT]  = { cancel = true },
+    [scheduler.SIG.HUP]  = { cancel = true },
+    [scheduler.SIG.TSTP] = { stop = true },
+    [scheduler.SIG.CONT] = { cont = true },
 }
 
 local threads = {}
@@ -106,8 +118,20 @@ function scheduler.signal(uid, sig)
         return scheduler.kill(uid)
     end
 
-    t.cancelled = true
-    if t.wakeAt ~= nil then t.wakeAt = 0 end
+    local act = scheduler.sig.act[sig]
+    if act then
+        if act.cancel then
+            t.cancelled = true
+            if t.wakeAt ~= nil then t.wakeAt = 0 end
+        end
+        if act.stop then
+            scheduler.stop(uid)
+        elseif act.cont then
+            scheduler.cont(uid)
+        end
+    end
+
+    -- Wakeup!
     if t.waiting then
         t.waiting = false
         t.hasResume = true

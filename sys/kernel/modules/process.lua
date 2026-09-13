@@ -204,6 +204,13 @@ local function onProcessDeath(pid)
 end
 
 -- Parent? Maybe
+--[[ It can have a table with:
+    label
+    onExit function
+    ppid, parent process id, or set to false to be kernel owned
+    onOrphaned functions
+    pgid, see pgid for options
+--]]
 function process.spawn(fn, opts)
     checkArg(1, fn, "function")
     checkArg(2, opts, "table", "nil")

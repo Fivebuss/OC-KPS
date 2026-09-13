@@ -1,9 +1,8 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
 
--- Global
-event = require("sys.kernel.modules.event")
-component = require("component")
+local event = require("sys.kernel.modules.event")
+local component = require("component")
 local package = require("package")
 local filesystem = require("filesystem")
 

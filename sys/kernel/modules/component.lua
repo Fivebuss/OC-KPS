@@ -1,6 +1,7 @@
 -- Kinda openOS's but with some custom stuff
 
 local component = require("component")
+local event = require("sys.kernel.modules.event")
 
 local adding = {}
 local primaries = {}

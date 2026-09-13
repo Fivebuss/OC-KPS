@@ -30,7 +30,7 @@ return {
         for _, t in ipairs(infotable) do
             console:write(
                 string.format(
-                    "PID=%s PPID=%s cmd=%s status=%s waiting=%s sleeping=%s cancelled=%s stopped=%s age=%.2f\n",
+                    "PID=%s PPID=%s label=%s status=%s waiting=%s sleeping=%s cancelled=%s stopped=%s age=%.2f\n",
                     tostring(t.pid),
                     tostring(t.ppid),
                     tostring(t.cmd),
@@ -150,4 +150,21 @@ return {
             console:write(string.format("\27[%dm%s\27[0m\n", color[1], color[2]))
         end
     end,
+
+    spawnTest = function(cenv)
+        local process = polaris.process
+        local function test()
+            polaris.process.sleep(5)
+            console:write("Finished\n")
+        end
+        local opts = {
+            label = "Child Test",
+            ppid = process.self(),
+            pgid = process.GROUP.USERFG,
+            onExit = function(success, err)
+                console:write("Child onExit\n")
+            end,
+        }
+        process.spawn(test, opts)
+    end
 }
