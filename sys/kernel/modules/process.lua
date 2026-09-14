@@ -633,7 +633,7 @@ function process.closeAll(pid)
     end
 end
 
--- Obliterates fully
+-- Obliterates running, io and forgets a pid
 function process.destroy(pid)
     if isKernelPid(pid) then return false end
 

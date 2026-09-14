@@ -29,31 +29,20 @@ local realLoad = load
 -- Modifies load, error and assert
 local function installOverrides(e)
     e.error = function(msg, level)
-        return msg
+        error(msg, (level or 1) + 1)
     end
 
     e.assert = function(v, msg, ...)
         if v then
             return v, msg, ...
         end
-        return e.error(msg == nil and "assertion failed!" or msg)
+
+        e.error(msg == nil and "assertion failed!" or msg, 1)
     end
 
     e.load = function(chunk, chunkname, mode, givenEnv)
         local targetEnv = givenEnv or e
-        local fn, err = realLoad(chunk, chunkname, mode or "bt", targetEnv)
-        if not fn then
-            return nil, err
-        end
-
-        return function(...)
-            local packed = table.pack(pcall(fn, ...))
-            local ok = packed[1]
-            if not ok then
-                return false, packed[2]
-            end
-            return table.unpack(packed, 2, packed.n)
-        end
+        return realLoad(chunk, chunkname, mode or "bt", targetEnv)
     end
 end
 

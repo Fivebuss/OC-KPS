@@ -166,5 +166,22 @@ return {
             end,
         }
         process.spawn(test, opts)
+    end,
+
+    catch = function(cenv)
+        local function testError()
+            error("errored")
+        end
+        local ok, result = xpcall(testError, function(msg)
+            console:write(msg .. "\n")
+        end)
+    end,
+
+    error = function(cenv)
+        error("errored")
+    end,
+
+    assert = function(cenv)
+        assert(false)
     end
 }

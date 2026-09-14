@@ -67,8 +67,6 @@ local shellPid
 shellPid = process.spawn(initShell, {
     label = "init_console",
     onExit = function(success, reason)
-        assert(success, reason)
-        console:write("Console exit\n")
         computer.beep(2000)
         computer.beep(2000)
         computer.beep(2000)
