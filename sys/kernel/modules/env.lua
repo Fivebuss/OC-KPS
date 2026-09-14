@@ -28,6 +28,28 @@ local realLoad = load
 
 -- Modifies load, error and assert
 local function installOverrides(e)
+    -- Environment variable stuff
+    e.env = e.env or {}
+
+    e.getenv = function(key)
+        checkArg(1, key, "string")
+        return e.env[key]
+    end
+
+    e.setenv = function(key, value)
+        checkArg(1, key, "string")
+        e.env[key] = value
+    end
+
+    e.getall = function()
+        local result = {}
+        for k, v in pairs(e.env) do
+            result[k] = v
+        end
+        return result
+    end
+
+
     e.error = function(msg, level)
         error(msg, (level or 1) + 1)
     end
@@ -53,7 +75,14 @@ function env.new(base)
 
     local e = {}
     for k, v in pairs(base) do
-        e[k] = v
+        if k == "env" and type(v) == "table" then
+            e.env = {}
+            for k2, v2 in pairs(v) do
+                e.env[k2] = v2
+            end
+        else
+            e[k] = v
+        end
     end
 
     e._G = e
@@ -70,7 +99,7 @@ function env.forProcess(pid, parentEnv)
 
     local e = owners[pid]
     if not e then
-        e = parentEnv or env.new()
+        e = parentEnv and env.new(parentEnv) or env.new()
         owners[pid] = e
     end
     return e
