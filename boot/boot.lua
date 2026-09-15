@@ -99,7 +99,7 @@ status("Executing stage 2 boot")
 local bootScripts = {}
 for file in filesystem.list("/boot") do
     local path = "/boot/" .. file
-    if file ~= "boot.lua" and not filesystem.isDirectory(path) then
+    if file ~= "boot.lua" and not filesystem.isDirectory(path) and file:sub(-4) == ".lua" then
         table.insert(bootScripts, path)
     end
 end

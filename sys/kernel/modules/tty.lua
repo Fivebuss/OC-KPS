@@ -104,6 +104,7 @@ local sigacts = {
     D = "HUP",  -- ^D eof/hup
     C = "INT",  -- ^C int
     Z = "TSTP", -- ^Z
+    ["/"] = "KILL", -- ^/
 }
 
 -- Uses polaris.config instead

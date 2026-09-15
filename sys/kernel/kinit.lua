@@ -32,9 +32,7 @@ polaris.scheduler.interval = interval
 
 polaris.scheduler.handler = polaris.scheduler.init(event, interval)
 
--- Process management: owns per-process (scheduler uid) stdio, and will
--- later own i/o routing between processes, child tracking, and signal
--- propagation. Needs scheduler + io, so load it after both.
+-- Process managemen for stdio and everything
 polaris.process = require("sys.kernel.modules.process")
 
 --- Logging

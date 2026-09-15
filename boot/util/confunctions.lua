@@ -183,5 +183,16 @@ return {
 
     assert = function(cenv)
         assert(false)
+    end,
+
+    free = function(cenv)
+        local total = computer.totalMemory() or "fail"
+        if total == "fail" then
+            console:write("memory unavailable?\n")
+            return true
+        end
+        local max = 0
+        max = math.max(max, computer.freeMemory())
+        console:write(string.format("Total%12d\nUsed%13d\nFree%13d\n", total, total - max, max))
     end
 }
