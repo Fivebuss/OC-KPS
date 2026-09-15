@@ -9,7 +9,8 @@
     "need-check-nil",
     "param-type-mismatch",
     "duplicate-set-field",
-    "redundant-parameter"
+    "redundant-parameter",
+        "missing-fields"
   ],
   "Lua.diagnostics.globals": [
     "component",

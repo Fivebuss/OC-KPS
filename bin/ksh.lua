@@ -1,55 +1,12 @@
 -- /bin/ksh.lua
--- Okay im abt 1% the way to porting MShell
+-- Okay more stuff ported
 
 local process = polaris.process
 local filesystem = require("filesystem")
+local io = polaris.io
 
--- hope
 local path = "/bin:/sbin"
 
--- every spawned process gets this
-local function createProcessIO()
-    local pio = {}
-
-    function pio.write(...)
-        return process.write(...)
-    end
-
-    function pio.writeln(...)
-        process.write(...)
-        return process.write("\n")
-    end
-
-    function pio.read(...)
-        return process.input():read(...)
-    end
-
-    function pio.readline(...)
-        return process.input():readLine(...)
-    end
-
-    function pio.writeError(...)
-        return process.writeError(...)
-    end
-
-    function pio.writelnError(...)
-        process.writeError(...)
-        return process.writeError("\n")
-    end
-
-    function pio.flush()
-        return process.output():flush()
-    end
-
-    -- The fds
-    pio.stdin = process.input()
-    pio.stdout = process.output()
-    pio.stderr = process.error()
-
-    return pio
-end
-
--- : seperated in theory
 local function splitPath(p)
     local parts = {}
     for entry in p:gmatch("[^:]+") do
@@ -61,7 +18,6 @@ end
 local pathDirs = splitPath(path)
 
 local function resolveCommand(name)
-    if name == "ksh" then return nil end
     for _, dir in ipairs(pathDirs) do
         local candidate = filesystem.concat(dir, name .. ".lua")
         if filesystem.exists(candidate) and not filesystem.isDirectory(candidate) then
@@ -71,7 +27,7 @@ local function resolveCommand(name)
     return nil
 end
 
--- I wonder what this does
+-- Errors exist yay
 local function writeRed(stream, ...)
     stream:write("\27[31m")
     stream:write(...)
@@ -81,121 +37,528 @@ end
 local tty = polaris.tty.new(polaris.gpu)
 tty:setCursorShape("underline")
 
-tty.disabled.C = true
-tty.disabled.D = true
+-- For later
 tty.disabled.Z = true
 
 polaris.config["tty.profile"] = 7
 
+-- Pipeline stuff
+local function ttyOutPassthrough()
+    return {
+        write = function(_, ...) return tty:write(...) end,
+        close = function() end,
+    }
+end
+
+local function ttyInPassthrough()
+    return {
+        read = function(_, ...) return tty.reader:read(...) end,
+        readLine = function(_, ...) return tty.reader:readLine(...) end,
+        close = function() end,
+    }
+end
+
 local shellPid
+local lastExitCode = 0
 
--- Out
-local function createOutStream()
-    return {
-        write = function(self, ...)
-            return tty:write(...)
-        end,
-        close = function(self) end,
-    }
+-- PWD
+local currPath = "/"
+
+local function resolvePath(base, target)
+    if not target or target == "" then
+        return base
+    end
+    if target:sub(1, 1) ~= "/" then
+        target = filesystem.concat(base, target)
+    end
+    return filesystem.canonical(target)
 end
 
--- Out but red
-local function createErrStream()
-    return {
-        write = function(self, ...)
-            return writeRed(tty, ...)
-        end,
-        close = function(self) end,
-    }
+local function stripQuotes(s)
+    if #s >= 2 then
+        local a, b = s:sub(1, 1), s:sub(-1)
+        if (a == '"' and b == '"') or (a == "'" and b == "'") then
+            return s:sub(2, -2)
+        end
+    end
+    return s
 end
 
--- I dont use this right now
-local function createInStream()
-    return {
-        read = function(self, n)
-            return nil -- nothing to give yet, EOF style
-        end,
-        close = function(self) end,
-    }
+-- Useful stuff in console. Will remove for later or expose to env
+local console = {
+    resolvePath = resolvePath,
+    currPath = function() return currPath end,
+    stripQuotes = stripQuotes,
+}
+
+-- Todo: make better
+local function expandVars(str, getenv)
+    local out = str:gsub("%$%b{}", function(tok)
+        local name = tok:sub(3, -2)
+        if name == "?" then return tostring(lastExitCode) end
+        return getenv(name) or ""
+    end)
+    out = out:gsub("%$%?", tostring(lastExitCode))
+    out = out:gsub("%$([%a_][%w_]*)", function(name)
+        return getenv(name) or ""
+    end)
+    return out
 end
 
--- Builtin stuff
+-- -- Tokenizer is miles shorter, thanks text library
+local function splitAndChain(line)
+    local groups = {}
+    local current = {}
+    local inD, inS = false, false
+    local i, len = 1, #line
+
+    while i <= len do
+        local c = line:sub(i, i)
+        if c == '"' and not inS then
+            inD = not inD
+            current[#current + 1] = c
+        elseif c == "'" and not inD then
+            inS = not inS
+            current[#current + 1] = c
+        elseif c == "&" and line:sub(i + 1, i + 1) == "&" and not inD and not inS then
+            groups[#groups + 1] = table.concat(current)
+            current = {}
+            i = i + 1 -- skip the second &
+        else
+            current[#current + 1] = c
+        end
+        i = i + 1
+    end
+    groups[#groups + 1] = table.concat(current)
+    return groups
+end
+
+-- Splits on | outside quote
+local function splitPipes(line)
+    local segments = {}
+    local current = {}
+    local inD, inS = false, false
+
+    for i = 1, #line do
+        local c = line:sub(i, i)
+        if c == '"' and not inS then
+            inD = not inD
+            current[#current + 1] = c
+        elseif c == "'" and not inD then
+            inS = not inS
+            current[#current + 1] = c
+        elseif c == "|" and not inD and not inS then
+            segments[#segments + 1] = table.concat(current)
+            current = {}
+        else
+            current[#current + 1] = c
+        end
+    end
+    segments[#segments + 1] = table.concat(current)
+    return segments
+end
+
+-- Elseif elseif elseif
+-- Yes tokenizing is still a better idea
+local function tokenize(segment)
+    local words = {}
+    local current = {}
+    local inD, inS = false, false
+    local i, len = 1, #segment
+
+    local function flush()
+        if #current > 0 then
+            words[#words + 1] = table.concat(current)
+            current = {}
+        end
+    end
+
+    while i <= len do
+        local c = segment:sub(i, i)
+        if c == '"' and not inS then
+            inD = not inD
+            current[#current + 1] = c
+        elseif c == "'" and not inD then
+            inS = not inS
+            current[#current + 1] = c
+        elseif c:match("%s") and not inD and not inS then
+            flush()
+        elseif c == "<" and not inD and not inS then
+            flush()
+            words[#words + 1] = "<"
+        elseif c == ">" and not inD and not inS then
+            flush()
+            if segment:sub(i + 1, i + 1) == ">" then
+                words[#words + 1] = ">>"
+                i = i + 1
+            else
+                words[#words + 1] = ">"
+            end
+        else
+            current[#current + 1] = c
+        end
+        i = i + 1
+    end
+    flush()
+    return words
+end
+
+-- Grabs < > >> for now, expands stuff
+local function parseSegment(segment, getenv)
+    local words = tokenize(segment)
+    if #words == 0 then
+        return nil, "empty command"
+    end
+
+    local args = {}
+    local redirects = { stdinFile = nil, stdoutFile = nil, appendOut = false }
+    local i = 1
+    while i <= #words do
+        local w = words[i]
+        if w == "<" then
+            if not words[i + 1] then return nil, "missing filename after <" end
+            redirects.stdinFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            i = i + 2
+        elseif w == ">" then
+            if not words[i + 1] then return nil, "missing filename after >" end
+            redirects.stdoutFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            redirects.appendOut = false
+            i = i + 2
+        elseif w == ">>" then
+            if not words[i + 1] then return nil, "missing filename after >>" end
+            redirects.stdoutFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            redirects.appendOut = true
+            i = i + 2
+        else
+            args[#args + 1] = expandVars(stripQuotes(w), getenv)
+            i = i + 1
+        end
+    end
+
+    if #args == 0 then
+        return nil, "empty command"
+    end
+
+    return { args = args, redirects = redirects }
+end
+
+-- Pipe stuff
+-- 'a' append mode is weird
+local function openForOutput(full, append)
+    return io.newFileStream(full, append and "a" or "w")
+end
+
+-- Decides fd0/1/2 or tty
+local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
+    local stdin, stdout
+
+    if redirects.stdinFile then
+        local full = resolvePath(currPath, redirects.stdinFile)
+        if not filesystem.exists(full) then
+            return nil, nil, nil, "no such file: " .. redirects.stdinFile
+        end
+        local stream, reason = io.newFileStream(full, "r")
+        if not stream then return nil, nil, nil, tostring(reason) end
+        stdin = stream
+    else
+        stdin = inPipe or fallbackStdin or io.newStream()
+    end
+
+    if redirects.stdoutFile then
+        local full = resolvePath(currPath, redirects.stdoutFile)
+        local stream, reason = openForOutput(full, redirects.appendOut)
+        if not stream then return nil, nil, nil, tostring(reason) end
+        stdout = stream
+    else
+        stdout = outPipe or ttyOutPassthrough()
+    end
+
+    return stdin, stdout, ttyOutPassthrough()
+end
+
+-- Runs pipeline
+local function runPipeline(parsedSegments)
+    local segCount = #parsedSegments
+    local pipes = {}
+    for i = 1, segCount - 1 do
+        pipes[i] = io.newPipe(polaris.scheduler, 8192)
+    end
+
+    local results = {}
+    local remaining = segCount
+    local waiterPid = process.self()
+    local spawnedAny = false
+    local pids = {}
+
+    local function detachAll()
+        if tty.attach then
+            for _, pid in ipairs(pids) do
+                tty:detach(pid)
+            end
+        end
+    end
+
+    local function segmentDone(segIdx, exitCode, inPipe, outPipe)
+        if outPipe then outPipe:close() end
+        if inPipe then inPipe:closeRead() end
+        results[segIdx] = exitCode
+        remaining = remaining - 1
+        if remaining <= 0 then
+            detachAll()
+            process.send(waiterPid, true)
+        end
+    end
+
+    for segIdx = 1, segCount do
+        local seg = parsedSegments[segIdx]
+        local inPipe = pipes[segIdx - 1]
+        local outPipe = pipes[segIdx]
+        local resolved = resolveCommand(seg.args[1])
+
+        if not resolved then
+            writeRed(tty, "ksh: command not found: " .. tostring(seg.args[1]), "\n")
+            segmentDone(segIdx, 127, inPipe, outPipe)
+        else
+            local stdin, stdout, stderr, err = makeStreams(
+                inPipe, outPipe, seg.redirects,
+                segIdx == 1 and ttyInPassthrough() or nil)
+
+            if err then
+                writeRed(tty, "ksh: " .. err, "\n")
+                segmentDone(segIdx, 1, inPipe, outPipe)
+            else
+                spawnedAny = true
+                local pid
+                pid = process.spawn(function()
+                    local env = polaris.env.current()
+                    env.console = console
+                    env.args = seg.args
+                    env.setenv("PWD", currPath)
+                    -- Errors? Why
+                    env.io = {
+                        write = function(...) return process.write(...) end,
+                        writeln = function(...)
+                            process.write(...); return process.write("\n")
+                        end,
+                        writeError = function(...) return process.writeError(...) end,
+                        writelnError = function(...)
+                            process.writeError(...); return process.writeError("\n")
+                        end,
+                        read = function(...) return process.input():read(...) end,
+                        readline = function(...) return process.input():readLine(...) end,
+                        flush = function() return process.output():flush() end,
+                    }
+
+                    local ok, err = xpcall(function()
+                        local src, reason = filesystem.open(resolved, "r")
+                        if not src then error(reason or "cannot open", 0) end
+                        local chunks = {}
+                        while true do
+                            local chunk = src:read(math.huge)
+                            if not chunk then break end
+                            chunks[#chunks + 1] = chunk
+                        end
+                        src:close()
+
+                        local fn, loadErr = env.load(table.concat(chunks), "=" .. resolved, "bt")
+                        if not fn then error(loadErr, 0) end
+                        return fn(table.unpack(seg.args, 2))
+                    end, debug.traceback)
+
+                    if not ok then
+                        process.error():write("\27[31m", tostring(err), "\n\27[0m")
+                        process.exit(1)
+                    end
+                end, {
+                    label = seg.args[1],
+                    pgid = process.GROUP.USERFG,
+                    ppid = shellPid,
+                    onExit = function(success, exitCode)
+                        local code = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
+                        segmentDone(segIdx, code, inPipe, outPipe)
+                    end,
+                })
+
+                process.create(pid, stdin, stdout, stderr)
+                pids[#pids + 1] = pid
+                if tty.attach then
+                    tty:attach(pid)
+                end
+            end
+        end
+    end
+
+    if spawnedAny and remaining > 0 then
+        process.waitForInput()
+    end
+
+    lastExitCode = results[segCount] or lastExitCode
+end
+
+-- Shell builtins are sane
+
 local builtins = {}
-
-function builtins.clear()
-    tty:clear()
-end
 
 function builtins.exit()
     process.exit(0)
 end
 
--- This global is also available, will house some console info or something
-local console = {
+function builtins.clear()
+    tty:clear()
+end
 
-}
+function builtins.cd(args, _, _, _)
+    local target = args[2] or "/"
+    local full = resolvePath(currPath, target)
+    if not filesystem.exists(full) then
+        writeRed(tty, "cd: no such directory: " .. target, "\n")
+        lastExitCode = 1
+        return
+    end
+    if not filesystem.isDirectory(full) then
+        writeRed(tty, "cd: not a directory: " .. target, "\n")
+        lastExitCode = 1
+        return
+    end
+    currPath = full
+    lastExitCode = 0
+end
 
--- Processes
-local function runCommand(pathToFile, name)
-    local pid
-    local waiterPid = process.self()
+-- Just -n for now
+function builtins.echo(args, stdin, stdout, stderr)
+    local noNewline = false
+    local words = {}
 
-    pid = process.spawn(function()
-        local env = polaris.env.current()
-        env.console = console
-        env.io = createProcessIO()
-
-        local ok, err = xpcall(function()
-            local fn, loadErr = env.load(assert(select(2, pcall(function()
-                local f = assert(filesystem.open(pathToFile, "r"))
-                local buf = {}
-                while true do
-                    local chunk = f:read(math.maxinteger or math.huge)
-                    if not chunk then break end
-                    buf[#buf + 1] = chunk
-                end
-                f:close()
-                return table.concat(buf)
-            end))), "=" .. pathToFile, "bt")
-
-            if not fn then
-                error(fn == nil and loadErr or fn, 0)
-            end
-
-            return fn()
-        end, debug.traceback)
-
-        if not ok then
-            process.error():write("\27[31m", tostring(err), "\n\27[0m")
+    for i = 2, #args do
+        if i == 2 and args[i] == "-n" then
+            noNewline = true
+        else
+            words[#words + 1] = args[i]
         end
-    end, {
-        label = name,
-        pgid = process.GROUP.USERFG,
-        ppid = shellPid,
-        onExit = function(success, reason)
-            process.send(waiterPid, true)
-        end,
-    })
-
-    process.create(pid, createInStream(), createOutStream(), createErrStream())
-
-    if tty.attach then
-        tty:attach(pid)
     end
 
-    process.waitForInput()
+    local line = table.concat(words, " ")
 
-    return pid
+    if noNewline then
+        stdout:write(line)
+        stdout:flush()
+    else
+        stdout:write(line, "\n")
+    end
+    lastExitCode = 0
 end
+
+function builtins.pwd(args, stdin, stdout, stderr)
+    stdout:write(currPath, "\n")
+    lastExitCode = 0
+end
+
+-- The input
+
+-- Everything but &&
+local function runCommandGroup(line, getenv)
+    local rawSegments = splitPipes(line)
+    local parsed = {}
+
+    for _, raw in ipairs(rawSegments) do
+        local seg, err = parseSegment(raw, getenv)
+        if not seg then
+            writeRed(tty, "ksh: syntax error: " .. err, "\n")
+            lastExitCode = 2
+            return
+        end
+        parsed[#parsed + 1] = seg
+    end
+
+    -- Shell process has builtins
+    local first = parsed[1].args[1]
+
+    if #parsed == 1 and builtins[first] then
+        local seg = parsed[1]
+
+        local stdin, stdout, stderr, err = makeStreams(
+            nil,
+            nil,
+            seg.redirects,
+            ttyInPassthrough()
+        )
+
+        if err then
+            writeRed(tty, "ksh: " .. err, "\n")
+            lastExitCode = 1
+            return
+        end
+
+        -- I likely dont need this anymore now that builtins go through write as usual
+        local ok, builtinErr = xpcall(
+            function()
+                return builtins[first](
+                    seg.args,
+                    stdin,
+                    stdout,
+                    stderr
+                )
+            end,
+            debug.traceback
+        )
+
+        -- Cleanup time
+        if stdin then
+            stdin:close()
+        end
+        if stdout then
+            stdout:close()
+        end
+        if stderr then
+            stderr:close()
+        end
+
+        if not ok then
+            writeRed(tty, tostring(builtinErr), "\n")
+            lastExitCode = 1
+        end
+
+        return
+    end
+
+    runPipeline(parsed)
+end
+
+local function executeLine(line, getenv)
+    line = line:gsub("[\r\n]+$", "")
+    if line:match("^%s*$") then return end
+
+    local groups = splitAndChain(line)
+
+    for _, group in ipairs(groups) do
+        if group:match("^%s*$") then
+            writeRed(tty, "ksh: syntax error near '&&'", "\n")
+            lastExitCode = 2
+            return
+        end
+
+        runCommandGroup(group, getenv)
+
+        if lastExitCode ~= 0 then
+            -- && skip
+            return
+        end
+    end
+end
+
+-- Loop. I hate this.
 
 local function shellLoop()
     tty:clear()
     tty:write("ksh loaded\n")
 
     local stdin = process.input()
+    local env = polaris.env.current()
+    env.setenv("PWD", currPath)
 
     while true do
-        tty:write("> ")
+        -- To fix cursor bug I do \r lol, as I am to busy to fix it normally
+        tty:write("\r" .. currPath .. "> ")
         tty:flush()
 
         local line = stdin:readLine()
@@ -205,33 +568,8 @@ local function shellLoop()
             return
         end
 
-        line = line:gsub("[\r\n]", "")
-        local name = line:match("^%s*(%S+)%s*$")
-
-        if name then
-            local builtin = builtins[name]
-
-            if builtin then
-                local ok, err = xpcall(builtin, debug.traceback)
-                if not ok then
-                    writeRed(tty, tostring(err), "\n")
-                end
-            else
-                local resolved = resolveCommand(name)
-
-                if resolved then
-                    local ok, err = xpcall(function()
-                        return runCommand(resolved, name)
-                    end, debug.traceback)
-
-                    if not ok then
-                        writeRed(tty, tostring(err), "\n")
-                    end
-                else
-                    writeRed(tty, "ksh: command not found: " .. name, "\n")
-                end
-            end
-        end
+        env.setenv("PWD", currPath)
+        executeLine(line, env.getenv)
     end
 end
 
