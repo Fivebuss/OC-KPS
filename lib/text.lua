@@ -479,6 +479,34 @@ function text.wrap(value, width, maxWidth)
   end
 end
 
+-- String handlers because useful for devfs
+function text.internal.reader(data, mode)
+  data = data or ""
+  local pos = 1
+  return {
+    read = function(_, n)
+      n = n or math.huge
+      if pos > #data then return nil end
+      local chunk = data:sub(pos, pos + n - 1)
+      pos = pos + #chunk
+      return chunk
+    end,
+    close = function() end
+  }
+end
+
+function text.internal.writer(write, mode, existing)
+  if mode:match("a") and existing then
+    write(existing)
+  end
+  return {
+    write = function(_, value)
+      return write(value)
+    end,
+    close = function() end
+  }
+end
+
 -- Wrapped lines again
 
 function text.wrappedLines(value, width, maxWidth)

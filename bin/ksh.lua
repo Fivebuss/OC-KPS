@@ -242,6 +242,8 @@ local function parseSegment(segment, getenv)
     return { args = args, redirects = redirects }
 end
 
+local builtins = {}
+
 -- Pipe stuff
 -- 'a' append mode is weird
 local function openForOutput(full, append)
@@ -313,9 +315,10 @@ local function runPipeline(parsedSegments)
         local seg = parsedSegments[segIdx]
         local inPipe = pipes[segIdx - 1]
         local outPipe = pipes[segIdx]
-        local resolved = resolveCommand(seg.args[1])
+        local builtin = builtins[seg.args[1]]
+        local resolved = not builtin and resolveCommand(seg.args[1])
 
-        if not resolved then
+        if not builtin and not resolved then
             writeRed(tty, "ksh: command not found: " .. tostring(seg.args[1]), "\n")
             segmentDone(segIdx, 127, inPipe, outPipe)
         else
@@ -350,6 +353,16 @@ local function runPipeline(parsedSegments)
                     }
 
                     local ok, err = xpcall(function()
+                        if builtin then
+                            return builtin(seg.args, process.input(), {
+                                write = function(_, ...) return process.write(...) end,
+                                close = function() end,
+                            }, {
+                                write = function(_, ...) return process.writeError(...) end,
+                                close = function() end,
+                            })
+                        end
+
                         local src, reason = filesystem.open(resolved, "r")
                         if not src then error(reason or "cannot open", 0) end
                         local chunks = {}
@@ -396,8 +409,6 @@ local function runPipeline(parsedSegments)
 end
 
 -- Shell builtins are sane
-
-local builtins = {}
 
 function builtins.exit()
     process.exit(0)

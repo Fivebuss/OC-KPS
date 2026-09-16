@@ -61,6 +61,12 @@ dofile("sys/kernel/modules/component.lua")
 package.loaded["sys.kernel.modules.component"] = component
 log("Registered module: component")
 
+-- devfs time
+polaris.devfs = require("sys.kernel.modules.devfs")
+filesystem.mount(polaris.devfs.proxy, "/dev")
+polaris.devfs.register(polaris.devfs.proxy)
+log("Registered module: devfs\ndevfs: mounted /dev")
+
 -- Mount tmp
 if computer.tmpAddress() then
   filesystem.mount(computer.tmpAddress(), "/tmp")
