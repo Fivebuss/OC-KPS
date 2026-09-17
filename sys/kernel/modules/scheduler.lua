@@ -344,8 +344,9 @@ end
 function scheduler.checkCancel()
     local uid = activeUid
     local t = threads[uid]
+
     if t and t.cancelled then
-        error("cancelled", 0)
+        coroutine_yield("cancelled")
     end
 end
 
@@ -358,15 +359,21 @@ end
 
 -- Kills all corountines
 function scheduler.killAll(exceptUid)
+    local uids = {}
+
     for uid in pairs(threads) do
         if uid ~= exceptUid then
-            scheduler.kill(uid)
+            uids[#uids + 1] = uid
         end
     end
-    if exceptUid then
+
+    for _, uid in ipairs(uids) do
+        scheduler.kill(uid)
+    end
+
+    if exceptUid and threads[exceptUid] then
         threads[exceptUid] = nil
         threadCount = threadCount - 1
-        -- So we can exclude onExit
     end
 end
 
@@ -449,10 +456,18 @@ local function tick(...)
                         if t.onExit then t.onExit(true, a, b, c) end
                     end
                 else
-                    -- Added read input for Mshell
+                    -- Maybe better cancelling?
                     local reason = a
-                    if reason == "sleep" and type(b) == "number" then
-                        t.wakeAt = computer.uptime() + b -- Hopefully be more accurate
+
+                    if reason == "cancelled" then
+                        thr[uid] = nil
+                        threadCount = threadCount - 1
+
+                        if t.onExit then
+                            t.onExit(true, "cancelled")
+                        end
+                    elseif reason == "sleep" and type(b) == "number" then
+                        t.wakeAt = computer.uptime() + b
                         t.waiting = false
                     elseif reason == "readInput" then
                         if t.inputQueue and #t.inputQueue > 0 then
