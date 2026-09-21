@@ -100,11 +100,12 @@ end
 
 -- Uses my own scheduler
 
+-- Internal tty characters
 local sigacts = {
-    D = "HUP",  -- ^D eof/hup
-    C = "INT",  -- ^C int
-    Z = "TSTP", -- ^Z
-    ["/"] = "KILL", -- ^/
+    D = true,       -- ^D eof
+    C = "INT",      -- ^C int
+    Z = "TSTP",     -- ^Z
+    ["/"] = "KILL", -- ^\ quit
 }
 
 -- Uses polaris.config instead
@@ -121,6 +122,7 @@ function tty.new(gpu)
         attributes = { echo = true, line = true, raw = false, cursor = true, xoff = false },
         disabled = {},     -- Disabled signal handling
         attachedUids = {}, -- Owners
+        onSignal = nil,    -- Shells job
 
         in_esc = false,
         esc = "",
@@ -749,6 +751,7 @@ function tty.new(gpu)
         local outChar = aliases[code] or
             (ch > 255 and unicode.char or string.char)(ch)
         local tw = outChar
+        local sigName = nil -- set below if this keypress should notify self.onSignal
 
         if ch == 0 and not aliases[code] then
             return
@@ -769,19 +772,25 @@ function tty.new(gpu)
                 (ch == 31 and 63) or ch
             ):upper()
 
-            local sig = sigacts[tch]
-            if sig and not self.disabled[tch] and not self.attributes.raw then
-                for uid in pairs(self.attachedUids) do
-                    process.signal(uid, sig)
-                end
-                self.rb = ""
-                if tch == "D" then
-                    self.rb = "\4" -- ^D EOF
-                end
+            local act = sigacts[tch]
+            if act and not self.disabled[tch] and not self.attributes.raw then
                 outChar = ""
-            end
 
-            tw = "^" .. tch
+                if tch == "D" then
+                    -- EOF on empty
+                    tw = ""
+                    if #self.rb == 0 then
+                        outChar = "\4"
+                    end
+                else
+                    -- Print the guy
+                    self.rb = ""
+                    tw = "^" .. tch .. "\n"
+                    sigName = act
+                end
+            else
+                tw = "^" .. tch
+            end
         end
 
         if not self.attributes.raw then
@@ -811,8 +820,13 @@ function tty.new(gpu)
                 self.writer:write(line)
             elseif outChar == "\4" then
                 self.rb = ""
-                self.writer:close() -- EOF
+                self.writer:pulseEof() -- ^D: one-shot EOF, not a dead pipe
             end
+        end
+
+        -- Fix eof 
+        if sigName and self.onSignal then
+            self:onSignal(sigName)
         end
     end
 

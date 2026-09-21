@@ -316,8 +316,9 @@ local function newPipe(scheduler, capacity)
         _head = 1,            -- index into _buf first not used
         _headOffset = 0,      -- how many bytes of _buf[_head] have already been used
         _size = 0,            -- unread bytes left
-        _closedWrite = false, -- writer endpoint closed so reader gets EOF
+        _closedWrite = false, -- Closed forever
         _closedRead = false,  -- reader endpoint closed
+        _eofSig = false,    -- EOF without dying
         _scheduler = scheduler,
         _capacity = capacity,
         _readerUid = nil, -- uid blocked in read(), if any
@@ -436,6 +437,11 @@ function pipeMt.__index:read(count)
             return nil -- EOF
         end
 
+        if self._eofSig then
+            self._eofSig = false -- EOF
+            return nil
+        end
+
         self._readerUid = self._scheduler.currentThread()
         self._scheduler.waitForInput()
         self._scheduler.checkCancel() -- ^C while blocked mid-pipe
@@ -472,6 +478,16 @@ function pipeMt.__index:readLine()
             return nil
         end
 
+        if self._eofSig then
+            self._eofSig = false
+            if self._size > 0 then
+                local rest = pipeTake(self, nil)
+                pipeWake(self, "_writerUid")
+                return rest
+            end
+            return nil
+        end
+
         self._readerUid = self._scheduler.currentThread()
         self._scheduler.waitForInput()
         self._scheduler.checkCancel()
@@ -481,6 +497,12 @@ end
 -- Writer side is done producing (e.g. cat reached EOF on the file)
 function pipeMt.__index:close()
     self._closedWrite = true
+    pipeWake(self, "_readerUid")
+end
+
+-- End reading without killing it
+function pipeMt.__index:SigEof()
+    self._eofSig = true
     pipeWake(self, "_readerUid")
 end
 
@@ -510,6 +532,8 @@ function pipeWriterMt.__index:write(...) return self._pipe:write(...) end
 function pipeWriterMt.__index:writeln(...) return self._pipe:writeln(...) end
 
 function pipeWriterMt.__index:close() return self._pipe:close() end
+
+function pipeWriterMt.__index:SigEof() return self._pipe:SigEof() end
 
 -- Reader and writer are different
 local function newPipeEndpoints(scheduler, capacity)

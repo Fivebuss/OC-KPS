@@ -25,7 +25,14 @@ local function chunkRead(reader)
 end
 
 if #args <= 1 then
-    chunkRead({ read = function(_, n) return io.read(n) end })
+    -- Interactive mode
+    while true do
+        local line = io.read("l")
+        if not line then break end
+        io.write(line, "\n")
+        io.flush()
+        process.checkCancel()
+    end
     return
 end
 

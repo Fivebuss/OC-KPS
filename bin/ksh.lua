@@ -60,9 +60,23 @@ end
 
 local shellPid
 local lastExitCode = 0
+local fgBusy = false -- true while a foreground pipeline is actually running
 
 -- PWD
 local currPath = "/"
+
+local function drawPrompt()
+    tty:write("\r" .. currPath .. "> ")
+    tty:flush()
+end
+
+-- Deal with signals
+tty.onSignal = function(_, sig)
+    process.signalGroup(process.GROUP.USERFG, sig)
+    if not fgBusy then
+        drawPrompt()
+    end
+end
 
 local function resolvePath(base, target)
     if not target or target == "" then
@@ -244,6 +258,18 @@ end
 
 local builtins = {}
 
+-- So we can support redirection
+local function fdStream(fd)
+    return setmetatable({}, {
+        __index = function(_, key)
+            return function(_, ...)
+                local desc = process.stream(fd)
+                return desc[key](desc, ...)
+            end
+        end,
+    })
+end
+
 -- Pipe stuff
 -- 'a' append mode is weird
 local function openForOutput(full, append)
@@ -350,6 +376,11 @@ local function runPipeline(parsedSegments)
                         read = function(...) return process.input():read(...) end,
                         readline = function(...) return process.input():readLine(...) end,
                         flush = function() return process.output():flush() end,
+
+                        -- Hey look, actual stream objects
+                        stdin = fdStream(0),
+                        stdout = fdStream(1),
+                        stderr = fdStream(2),
                     }
 
                     local ok, err = xpcall(function()
@@ -402,7 +433,9 @@ local function runPipeline(parsedSegments)
     end
 
     if spawnedAny and remaining > 0 then
+        fgBusy = true
         process.waitForInput()
+        fgBusy = false
     end
 
     lastExitCode = results[segCount] or lastExitCode
@@ -569,8 +602,7 @@ local function shellLoop()
 
     while true do
         -- To fix cursor bug I do \r lol, as I am to busy to fix it normally
-        tty:write("\r" .. currPath .. "> ")
-        tty:flush()
+        drawPrompt()
 
         local line = stdin:readLine()
 
