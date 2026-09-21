@@ -318,7 +318,7 @@ local function newPipe(scheduler, capacity)
         _size = 0,            -- unread bytes left
         _closedWrite = false, -- Closed forever
         _closedRead = false,  -- reader endpoint closed
-        _eofSig = false,    -- EOF without dying
+        _eofRecv = false,    -- EOF without dying
         _scheduler = scheduler,
         _capacity = capacity,
         _readerUid = nil, -- uid blocked in read(), if any
@@ -437,8 +437,8 @@ function pipeMt.__index:read(count)
             return nil -- EOF
         end
 
-        if self._eofSig then
-            self._eofSig = false -- EOF
+        if self._eofRecv then
+            self._eofRecv = false -- EOF
             return nil
         end
 
@@ -478,8 +478,8 @@ function pipeMt.__index:readLine()
             return nil
         end
 
-        if self._eofSig then
-            self._eofSig = false
+        if self._eofRecv then
+            self._eofRecv = false
             if self._size > 0 then
                 local rest = pipeTake(self, nil)
                 pipeWake(self, "_writerUid")
@@ -501,8 +501,8 @@ function pipeMt.__index:close()
 end
 
 -- End reading without killing it
-function pipeMt.__index:SigEof()
-    self._eofSig = true
+function pipeMt.__index:sigEof()
+    self._eofRecv = true
     pipeWake(self, "_readerUid")
 end
 
@@ -533,7 +533,7 @@ function pipeWriterMt.__index:writeln(...) return self._pipe:writeln(...) end
 
 function pipeWriterMt.__index:close() return self._pipe:close() end
 
-function pipeWriterMt.__index:SigEof() return self._pipe:SigEof() end
+function pipeWriterMt.__index:sigEof() return self._pipe:sigEof() end
 
 -- Reader and writer are different
 local function newPipeEndpoints(scheduler, capacity)

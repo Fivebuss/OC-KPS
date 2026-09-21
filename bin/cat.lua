@@ -24,7 +24,7 @@ local function chunkRead(reader)
     end
 end
 
-if #args <= 1 then
+if #args == 0 then
     -- Interactive mode
     while true do
         local line = io.read("l")
@@ -36,17 +36,17 @@ if #args <= 1 then
     return
 end
 
-if #args > 2 then
+if #args > 1 then
     io.writelnError("cat: too many arguments")
     return
 end
 
-local rawArg = args[2]
-local target = console.stripQuotes(rawArg)
+local firstArg = args[1]
+local target = console.stripQuotes(firstArg)
 local fullPath = console.resolvePath(console.currPath(), target)
 
 if not filesystem.exists(fullPath) or filesystem.isDirectory(fullPath) then
-    io.writelnError("cat: " .. rawArg .. ": No such file")
+    io.writelnError("cat: " .. firstArg .. ": No such file")
     return
 end
 
@@ -55,7 +55,7 @@ if not handle then
     handle, reason = filesystem.open(fullPath, "r")
 end
 if not handle then
-    io.writelnError("cat: " .. rawArg .. ": Cannot open file: " .. tostring(reason))
+    io.writelnError("cat: " .. firstArg .. ": Cannot open file: " .. tostring(reason))
     return
 end
 

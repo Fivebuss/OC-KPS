@@ -820,7 +820,7 @@ function tty.new(gpu)
                 self.writer:write(line)
             elseif outChar == "\4" then
                 self.rb = ""
-                self.writer:pulseEof() -- ^D: one-shot EOF, not a dead pipe
+                self.writer:sigEof() -- ^D: one-shot EOF, not a dead pipe
             end
         end
 

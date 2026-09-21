@@ -2,7 +2,7 @@
 -- Todo: make better
 local filesystem = require("filesystem")
 
-local target = args[2] and console.stripQuotes(args[2]) or console.currPath()
+local target = args[1] and console.stripQuotes(args[1]) or console.currPath()
 local fullPath = console.resolvePath(console.currPath(), target)
 
 if not filesystem.exists(fullPath) then

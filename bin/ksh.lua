@@ -258,6 +258,15 @@ end
 
 local builtins = {}
 
+-- args[1] is back to being normal
+local function argv(segArgs)
+    local out = {}
+    for i = 2, #segArgs do
+        out[i - 1] = segArgs[i]
+    end
+    return out
+end
+
 -- So we can support redirection
 local function fdStream(fd)
     return setmetatable({}, {
@@ -361,7 +370,7 @@ local function runPipeline(parsedSegments)
                 pid = process.spawn(function()
                     local env = polaris.env.current()
                     env.console = console
-                    env.args = seg.args
+                    env.args = argv(seg.args)
                     env.setenv("PWD", currPath)
                     -- Errors? Why
                     env.io = {
@@ -385,7 +394,7 @@ local function runPipeline(parsedSegments)
 
                     local ok, err = xpcall(function()
                         if builtin then
-                            return builtin(seg.args, process.input(), {
+                            return builtin(argv(seg.args), process.input(), {
                                 write = function(_, ...) return process.write(...) end,
                                 close = function() end,
                             }, {
@@ -452,7 +461,7 @@ function builtins.clear()
 end
 
 function builtins.cd(args, _, _, _)
-    local target = args[2] or "/"
+    local target = args[1] or "/"
     local full = resolvePath(currPath, target)
     if not filesystem.exists(full) then
         writeRed(tty, "cd: no such directory: " .. target, "\n")
@@ -473,8 +482,8 @@ function builtins.echo(args, stdin, stdout, stderr)
     local noNewline = false
     local words = {}
 
-    for i = 2, #args do
-        if i == 2 and args[i] == "-n" then
+    for i = 1, #args do
+        if i == 1 and args[i] == "-n" then
             noNewline = true
         else
             words[#words + 1] = args[i]
@@ -537,7 +546,7 @@ local function runCommandGroup(line, getenv)
         local ok, builtinErr = xpcall(
             function()
                 return builtins[first](
-                    seg.args,
+                    argv(seg.args),
                     stdin,
                     stdout,
                     stderr

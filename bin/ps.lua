@@ -70,11 +70,7 @@ local longSpec = { all = "a", human = "h", verbose = "verbose" }
 shortSpec = shortSpec .. "V"
 longSpec.verbose = "V"
 
--- arg[1] is program's name. Yes this is useful
-local argv = {}
-for i = 2, #args do
-    argv[#argv + 1] = args[i]
-end
+local argv = args
 
 for opt, val in getopt(argv, shortSpec, longSpec) do
     if opt == "u" then
