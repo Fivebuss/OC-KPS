@@ -120,7 +120,6 @@ function io.isDescriptor(v)
     return getmetatable(v) == descriptorMt
 end
 
-
 -- Filesystem operations
 local fsStreamMt = { __index = {} }
 
@@ -318,7 +317,7 @@ local function newPipe(scheduler, capacity)
         _size = 0,            -- unread bytes left
         _closedWrite = false, -- Closed forever
         _closedRead = false,  -- reader endpoint closed
-        _eofRecv = false,    -- EOF without dying
+        _eofRecv = false,     -- EOF without dying
         _scheduler = scheduler,
         _capacity = capacity,
         _readerUid = nil, -- uid blocked in read(), if any
@@ -459,9 +458,8 @@ function pipeMt.__index:readLine()
             local searchFrom = (idx == self._head) and (offset + 1) or 1
             local nl = chunk:find("\n", searchFrom, true)
             if nl then
-                local lineLen = scanned + (nl - searchFrom)
+                local lineLen = scanned + (nl - searchFrom) + 1 -- include the newline
                 local line = pipeTake(self, lineLen)
-                pipeTake(self, 1) -- consume the newline itself
                 pipeWake(self, "_writerUid")
                 return line
             end
@@ -479,12 +477,12 @@ function pipeMt.__index:readLine()
         end
 
         if self._eofRecv then
-            self._eofRecv = false
             if self._size > 0 then
                 local rest = pipeTake(self, nil)
                 pipeWake(self, "_writerUid")
                 return rest
             end
+            self._eofRecv = false
             return nil
         end
 

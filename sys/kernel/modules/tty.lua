@@ -745,7 +745,7 @@ function tty.new(gpu)
     -- Key handling is goofy with this event library. May change
     function self:onKeyDown(char, code)
         if char == 0 and code == 0 then return end
-        if self.attributes.xoff then return end            
+        if self.attributes.xoff then return end
 
         local ch = char
         local outChar = aliases[code] or
@@ -777,11 +777,14 @@ function tty.new(gpu)
                 outChar = ""
 
                 if tch == "D" then
-                    -- EOF on empty
+                    -- eof so write to buffer or signal
                     tw = ""
-                    if #self.rb == 0 then
-                        outChar = "\4"
+                    if #self.rb > 0 then
+                        self.writer:write(self.rb)
+                        self.rb = ""
                     end
+                    self.writer:sigEof()
+                    outChar = "" -- pipes problem
                 else
                     -- Print the guy
                     self.rb = ""
@@ -824,7 +827,7 @@ function tty.new(gpu)
             end
         end
 
-        -- Fix eof 
+        -- Fix eof
         if sigName and self.onSignal then
             self:onSignal(sigName)
         end
@@ -847,8 +850,11 @@ function tty.new(gpu)
         end
 
         if self.rb:find("\4") then
+            local eof_pos = self.rb:find("\4")
+            local data = usub(self.rb, 1, eof_pos - 1)
             self.rb = ""
-            return nil
+            -- Return buffered content or nil
+            return #data > 0 and data or nil
         end
 
         local take = math.min(n, len(self.rb))

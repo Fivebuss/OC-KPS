@@ -445,6 +445,10 @@ local function runPipeline(parsedSegments)
         fgBusy = true
         process.waitForInput()
         fgBusy = false
+        -- Newline prompt redraw
+        if tty.cx > 1 then
+            tty:write("\n")
+        end
     end
 
     lastExitCode = results[segCount] or lastExitCode

@@ -29,7 +29,7 @@ if #args == 0 then
     while true do
         local line = io.read("l")
         if not line then break end
-        io.write(line, "\n")
+        io.write(line .. "\n")
         io.flush()
         process.checkCancel()
     end
