@@ -46,6 +46,8 @@ polaris.config["tty.profile"] = 7
 local function ttyOutPassthrough()
     return {
         write = function(_, ...) return tty:write(...) end,
+        -- newline handling
+        flush = function(_) return tty:flush() end,
         close = function() end,
     }
 end

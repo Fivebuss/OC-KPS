@@ -27,9 +27,10 @@ end
 if #args == 0 then
     -- Interactive mode
     while true do
-        local line = io.read("l")
+        local line, _, noNewline = io.read("l")
         if not line then break end
-        io.write(line .. "\n")
+
+        io.write(noNewline and line or (line .. "\n"))
         io.flush()
         process.checkCancel()
     end

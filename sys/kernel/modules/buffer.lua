@@ -70,6 +70,14 @@ function buffer:flush()
     end
   end
 
+  -- Propagate the flush to the underlying stream too (e.g. a tty that
+  -- does its own internal line-buffering on top of us) - otherwise data
+  -- with no trailing newline can sit invisible in a lower buffer forever,
+  -- even though this buffer itself reports nothing pending.
+  if self.stream.flush then
+    return self.stream:flush()
+  end
+
   return self
 end
 
@@ -128,6 +136,11 @@ function buffer:readBytes(n)
   return self.stream:read(n)
 end
 
+-- Returns result, reason, noNewline.
+-- noNewline is true only when the returned data was cut short by EOF
+-- (e.g. a ^D flush) rather than terminated by an actual \r/\n - callers
+-- that care (like an interactive `cat`) can use this to avoid fabricating
+-- a newline that was never actually part of the input.
 function buffer:readLine(chop, timeout)
   self.timeout = timeout or (computer.uptime() + self.readTimeout)
 
@@ -150,7 +163,7 @@ function buffer:readLine(chop, timeout)
 
       self.bufferRead = buf:sub(i + #c)
 
-      return result
+      return result, nil, false
     else
       start = #self.bufferRead - (is_cr and 1 or 0)
 
@@ -160,10 +173,10 @@ function buffer:readLine(chop, timeout)
         if reason then
           return result, reason
         else
-          -- EOF.
+          -- EOF, no newline seen.
           result = #self.bufferRead > 0 and self.bufferRead or nil
           self.bufferRead = ""
-          return result
+          return result, nil, result ~= nil
         end
       end
     end
@@ -530,8 +543,18 @@ function buffer:formatted_read(readChunk, ...)
     end
   end
 
-  local results = {}
   local formats = table.pack(...)
+
+  -- single reads
+  if formats.n == 1 then
+    local result, reason, noNewline = read(1, formats[1])
+    if not result and reason then
+      return nil, reason
+    end
+    return result, nil, noNewline
+  end
+
+  local results = {}
 
   for i = 1, formats.n do
     local result, reason = read(i, formats[i])

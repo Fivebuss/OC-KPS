@@ -777,14 +777,9 @@ function tty.new(gpu)
                 outChar = ""
 
                 if tch == "D" then
-                    -- eof so write to buffer or signal
+                    -- eof makes me want to die
                     tw = ""
-                    if #self.rb > 0 then
-                        self.writer:write(self.rb)
-                        self.rb = ""
-                    end
-                    self.writer:sigEof()
-                    outChar = "" -- pipes problem
+                    outChar = "\4"
                 else
                     -- Print the guy
                     self.rb = ""
@@ -815,15 +810,21 @@ function tty.new(gpu)
         end
 
         if not self.attributes.xoff then
-            self.rb = self.rb .. outChar
+            if outChar == "\4" then
+                -- send to reader
+                if #self.rb > 0 then
+                    self.writer:write(self.rb)
+                    self.rb = ""
+                end
+                self.writer:sigEof() -- pipes problem
+            else
+                self.rb = self.rb .. outChar
 
-            if outChar == "\n" then
-                local line = self.rb
-                self.rb = ""
-                self.writer:write(line)
-            elseif outChar == "\4" then
-                self.rb = ""
-                self.writer:sigEof() -- ^D: one-shot EOF, not a dead pipe
+                if outChar == "\n" then
+                    local line = self.rb
+                    self.rb = ""
+                    self.writer:write(line)
+                end
             end
         end
 
