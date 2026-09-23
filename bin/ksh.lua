@@ -64,6 +64,9 @@ local shellPid
 local lastExitCode = 0
 local fgBusy = false -- true while a foreground pipeline is actually running
 
+-- Just for the shell
+local locals = {}
+
 -- PWD
 local currPath = "/"
 
@@ -107,18 +110,52 @@ local console = {
     stripQuotes = stripQuotes,
 }
 
+-- Hmmm
+local function lookupVar(name, getenv)
+    local v = locals[name]
+    if v ~= nil then return v end
+    return getenv(name)
+end
+
+-- support for :-  :=  :+  :? 
+local function applyOperator(name, op, arg, value)
+    if value ~= nil and value ~= "" then
+        if op == "+" then return arg end
+        return value
+    end
+
+    if op == "-" then return arg end
+    if op == "=" then
+        locals[name] = arg
+        return arg
+    end
+    if op == "?" then
+        return nil, arg ~= "" and arg or (name .. ": parameter not set")
+    end
+    return "" -- :+ with unset value
+end
+
 -- Todo: make better
 local function expandVars(str, getenv)
+    local failMsg
     local out = str:gsub("%$%b{}", function(tok)
-        local name = tok:sub(3, -2)
-        if name == "?" then return tostring(lastExitCode) end
-        return getenv(name) or ""
+        local body = tok:sub(3, -2)
+        local name, op, arg = body:match("^([%a_][%w_]*):([%-=+?])(.*)$")
+        if name then
+            local result, err = applyOperator(name, op, arg, lookupVar(name, getenv))
+            if err then failMsg = failMsg or err end
+            return result or ""
+        end
+        if body == "?" then return tostring(lastExitCode) end
+        if body == "$" then return tostring(shellPid or 0) end
+        return lookupVar(body, getenv) or ""
     end)
     out = out:gsub("%$%?", tostring(lastExitCode))
+    out = out:gsub("%$%$", tostring(shellPid or 0))
     out = out:gsub("%$([%a_][%w_]*)", function(name)
-        return getenv(name) or ""
+        return lookupVar(name, getenv) or ""
     end)
-    return out
+    return out, failMsg
 end
 
 -- -- Tokenizer is miles shorter, thanks text library
@@ -229,30 +266,40 @@ local function parseSegment(segment, getenv)
     local args = {}
     local redirects = { stdinFile = nil, stdoutFile = nil, appendOut = false }
     local i = 1
+    local expandFail
+    local function expand(w)
+        local out, failMsg = expandVars(stripQuotes(w), getenv)
+        expandFail = expandFail or failMsg
+        return out
+    end
     while i <= #words do
         local w = words[i]
         if w == "<" then
             if not words[i + 1] then return nil, "missing filename after <" end
-            redirects.stdinFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            redirects.stdinFile = expand(words[i + 1])
             i = i + 2
         elseif w == ">" then
             if not words[i + 1] then return nil, "missing filename after >" end
-            redirects.stdoutFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            redirects.stdoutFile = expand(words[i + 1])
             redirects.appendOut = false
             i = i + 2
         elseif w == ">>" then
             if not words[i + 1] then return nil, "missing filename after >>" end
-            redirects.stdoutFile = expandVars(stripQuotes(words[i + 1]), getenv)
+            redirects.stdoutFile = expand(words[i + 1])
             redirects.appendOut = true
             i = i + 2
         else
-            args[#args + 1] = expandVars(stripQuotes(w), getenv)
+            args[#args + 1] = expand(w)
             i = i + 1
         end
     end
 
     if #args == 0 then
         return nil, "empty command"
+    end
+
+    if expandFail then
+        return nil, expandFail, true
     end
 
     return { args = args, redirects = redirects }
@@ -316,7 +363,7 @@ local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
 end
 
 -- Runs pipeline
-local function runPipeline(parsedSegments)
+local function runPipeline(parsedSegments, tempAssigns)
     local segCount = #parsedSegments
     local pipes = {}
     for i = 1, segCount - 1 do
@@ -348,6 +395,14 @@ local function runPipeline(parsedSegments)
         end
     end
 
+    local tempEnvValues
+    if tempAssigns then
+        tempEnvValues = {}
+        for _, a in ipairs(tempAssigns) do
+            tempEnvValues[a.name] = locals[a.name]
+        end
+    end
+
     for segIdx = 1, segCount do
         local seg = parsedSegments[segIdx]
         local inPipe = pipes[segIdx - 1]
@@ -374,6 +429,11 @@ local function runPipeline(parsedSegments)
                     env.console = console
                     env.args = argv(seg.args)
                     env.setenv("PWD", currPath)
+                    if segIdx == 1 and tempEnvValues then
+                        for name, value in pairs(tempEnvValues) do
+                            env.setenv(name, value)
+                        end
+                    end
                     -- Errors? Why
                     env.io = {
                         write = function(...) return process.write(...) end,
@@ -512,18 +572,135 @@ function builtins.pwd(args, stdin, stdout, stderr)
     lastExitCode = 0
 end
 
+-- hey local variable, congratulations on migrating
+function builtins.export(args, stdin, stdout, stderr)
+    local env = polaris.env.current()
+
+    if #args == 0 then
+        for k, v in pairs(env.getall()) do
+            stdout:write(k .. "=" .. tostring(v), "\n")
+        end
+        lastExitCode = 0
+        return
+    end
+
+    for _, arg in ipairs(args) do
+        local name, value = arg:match("^([%a_][%w_]*)=(.*)$")
+        if name then
+            locals[name] = nil
+            env.setenv(name, value)
+        else
+            env.setenv(arg, locals[arg] or env.getenv(arg))
+            locals[arg] = nil
+        end
+    end
+    lastExitCode = 0
+end
+
+-- goodbye variable
+function builtins.unset(args, stdin, stdout, stderr)
+    local env = polaris.env.current()
+    for _, name in ipairs(args) do
+        locals[name] = nil
+        env.setenv(name, nil)
+    end
+    lastExitCode = 0
+end
+
+-- set hopefully works
+function builtins.set(args, stdin, stdout, stderr)
+    if #args == 0 then
+        local env = polaris.env.current()
+        local seen = {}
+        for k, v in pairs(env.getall()) do
+            stdout:write(k .. "=" .. tostring(v), "\n")
+            seen[k] = true
+        end
+        for k, v in pairs(locals) do
+            if not seen[k] then
+                stdout:write(k .. "=" .. tostring(v), "\n")
+            end
+        end
+        lastExitCode = 0
+        return
+    end
+
+    for _, arg in ipairs(args) do
+        local name, value = arg:match("^([%a_][%w_]*)=(.*)$")
+        if name then
+            locals[name] = value
+        end
+    end
+    lastExitCode = 0
+end
+
 -- The input
+
+-- Mmmm lists, returns them
+local function splitAssignments(words)
+    local assigns = {}
+    local i = 1
+    while words[i] do
+        local name, value = stripQuotes(words[i]):match("^([%a_][%w_]*)=(.*)$")
+        if not name then break end
+        assigns[#assigns + 1] = { name = name, value = value }
+        i = i + 1
+    end
+    local rest = {}
+    for j = i, #words do
+        rest[#rest + 1] = words[j]
+    end
+    return assigns, rest
+end
 
 -- Everything but &&
 local function runCommandGroup(line, getenv)
+    -- KEY=value
+    local words = tokenize(line)
+    local assigns, rest = splitAssignments(words)
+
+    if #assigns > 0 and #rest == 0 then
+        for _, a in ipairs(assigns) do
+            locals[a.name] = expandVars(a.value, getenv)
+        end
+        lastExitCode = 0
+        return
+    end
+
+    local saved
+    local savedNames
+    if #assigns > 0 then
+        saved = {}
+        savedNames = {}
+        for _, a in ipairs(assigns) do
+            saved[a.name] = locals[a.name]
+            savedNames[#savedNames + 1] = a.name
+            locals[a.name] = expandVars(a.value, getenv)
+        end
+        line = table.concat(rest, " ")
+    end
+
+    local function restoreLocals()
+        if not savedNames then return end
+        for _, name in ipairs(savedNames) do
+            locals[name] = saved[name]
+        end
+    end
+
     local rawSegments = splitPipes(line)
     local parsed = {}
 
     for _, raw in ipairs(rawSegments) do
-        local seg, err = parseSegment(raw, getenv)
+        local seg, err, isParamError = parseSegment(raw, getenv)
         if not seg then
-            writeRed(tty, "ksh: syntax error: " .. err, "\n")
-            lastExitCode = 2
+            if isParamError then
+                writeRed(tty, "ksh: " .. err, "\n")
+                lastExitCode = 1
+            else
+                writeRed(tty, "ksh: syntax error: " .. err, "\n")
+                lastExitCode = 2
+            end
+            restoreLocals()
             return
         end
         parsed[#parsed + 1] = seg
@@ -545,6 +722,7 @@ local function runCommandGroup(line, getenv)
         if err then
             writeRed(tty, "ksh: " .. err, "\n")
             lastExitCode = 1
+            restoreLocals()
             return
         end
 
@@ -577,10 +755,12 @@ local function runCommandGroup(line, getenv)
             lastExitCode = 1
         end
 
+        restoreLocals()
         return
     end
 
-    runPipeline(parsed)
+    runPipeline(parsed, saved and assigns)
+    restoreLocals()
 end
 
 local function executeLine(line, getenv)
