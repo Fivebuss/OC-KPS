@@ -546,24 +546,71 @@ end
 -- Just -n for now
 function builtins.echo(args, stdin, stdout, stderr)
     local noNewline = false
+    local interpretEscapes = false
     local words = {}
 
-    for i = 1, #args do
-        if i == 1 and args[i] == "-n" then
+    local i = 1
+
+    -- No need for getopt
+    while i <= #args do
+        local arg = args[i]
+
+        if arg == "-n" then
             noNewline = true
+        elseif arg == "-e" then
+            interpretEscapes = true
+        elseif arg == "-ne" or arg == "-en" then
+            noNewline = true
+            interpretEscapes = true
+        elseif arg == "--" then
+            -- End of options
+            i = i + 1
+            while i <= #args do
+                words[#words + 1] = args[i]
+                i = i + 1
+            end
+            break
         else
-            words[#words + 1] = args[i]
+            words[#words + 1] = arg
         end
+
+        i = i + 1
     end
 
     local line = table.concat(words, " ")
 
-    if noNewline then
-        stdout:write(line)
-        stdout:flush()
-    else
-        stdout:write(line, "\n")
+    if interpretEscapes then
+        -- Some basic stuff
+        line = line:gsub("\\([\\abfnrtv])", function(c)
+            local escapes = {
+                ["\\"] = "\\",
+                ["a"] = "\7",
+                ["b"] = "\b",
+                ["f"] = "\f",
+                ["n"] = "\n",
+                ["r"] = "\r",
+                ["t"] = "\t",
+                ["v"] = "\v",
+            }
+
+            return escapes[c]
+        end)
+
+        -- \0NNN, because I can
+        line = line:gsub("\\0(%d%d?%d?)", function(octal)
+            local n = tonumber(octal, 8)
+            return n and string.char(n) or ("\0" .. octal)
+        end)
     end
+
+    stdout:write(line)
+
+    if not noNewline then
+        stdout:write("\n")
+    else
+        stdout:flush()
+    end
+
     lastExitCode = 0
 end
 
