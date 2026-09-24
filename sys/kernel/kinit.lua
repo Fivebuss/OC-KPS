@@ -6,13 +6,20 @@ local component = require("component")
 local package = require("package")
 local filesystem = require("filesystem")
 
-polaris = {}   -- global
+polaris = {} -- global
 polaris.version = {}
 polaris.version.os = _G._OSVERSION
 polaris.version.kernel = "Polaris Kernel 0.1"
 _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
+polaris.analytics = { boot = {} }
+
+function polaris.analytics.addEvent(name)
+    polaris.analytics.boot[name] = { uptime = computer.uptime(), clock = os.clock() }
+end
+
+polaris.analytics.addEvent("kinit_start")
 
 -- Yeah this is temporary
 polaris.gpu = gpu
@@ -55,7 +62,7 @@ log("Registered module: tty")
 
 -- Component stuff
 for c, t in component.list() do
-  computer.pushSignal("component_added", c, t)
+    computer.pushSignal("component_added", c, t)
 end
 dofile("sys/kernel/modules/component.lua")
 package.loaded["sys.kernel.modules.component"] = component
@@ -69,8 +76,12 @@ log("Registered module: devfs\ndevfs: mounted /dev")
 
 -- Mount tmp
 if computer.tmpAddress() then
-  filesystem.mount(computer.tmpAddress(), "/tmp")
+    filesystem.mount(computer.tmpAddress(), "/tmp")
 end
 
+-- Service time
+polaris.services = require("sys.kernel.modules.services")
+log("Registered module: services")
 
+polaris.analytics.addEvent("kinit_end")
 return ("Polaris " .. polaris.version.kernel .. " loaded")

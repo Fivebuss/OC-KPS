@@ -2,6 +2,7 @@
 -- Okay more stuff ported
 
 local process = polaris.process
+polaris.analytics.addEvent("ksh")
 local filesystem = require("filesystem")
 local io = polaris.io
 
@@ -837,6 +838,7 @@ end
 local function shellLoop()
     tty:clear()
     tty:write("ksh loaded\n")
+    polaris.analytics.addEvent("console")
 
     local stdin = process.input()
     local env = polaris.env.current()

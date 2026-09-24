@@ -20,7 +20,8 @@ Process groups are just custom because linux is weird so we wont use theirs
   process.GROUP = {
     SYS     = 1, -- kernel lives here, you cannot touch it. Normally
     MISM    = 2, -- "mismanaged" yeah this is helpful for me, see below
-    SYSRESV = {3,4,5}, -- system reserved reserved
+    SYSRESV = {3,4,5}, -- system reserved reserved, only spawn's opts.reserved enters them
+    SVC     = 3, -- privileged services, see services.lua
     USER    = 6, -- default group for anything unless it specifies one
     USERFG  = 7,
     USERBG  = 8,
@@ -35,7 +36,7 @@ Process groups are just custom because linux is weird so we wont use theirs
 
 
 Functions of this
-  process.spawn(fn, opts): opts = { onExit, label, ppid, pgid, onOrphaned }. Returns pid
+  process.spawn(fn, opts): opts = { onExit, label, ppid, pgid, onOrphaned, reserved }. Returns pid
   process.self(): pid of the currently running process, or nil
   process.exists(pid): Does it?
   process.get(pid): copy of that processs table entry, or nil
@@ -84,7 +85,8 @@ process.SIG = {
 process.GROUP = {
     SYS     = 1,
     MISM    = 2,
-    -- 3,4,5 = sysresv reserved
+    SVC     = 3,
+    -- 4,5 = sysresv reserved
     USER    = 6,
     USERFG  = 7,
     USERBG  = 8,
@@ -139,10 +141,10 @@ local function isKernel()
 end
 
 -- Makes sure its a sane PGID. no, you cannot set it to -1
-local function normalizeGroup(gid)
+local function normalizeGroup(gid, reserved)
     if type(gid) ~= "number" then return process.GROUP.SYS end
     if gid == process.GROUP.SYS then return process.GROUP.SYS end
-    if SYSRESV[gid] then return process.GROUP.SYS end
+    if SYSRESV[gid] then return reserved and gid or process.GROUP.SYS end
     if gid < 1 then return process.GROUP.SYS end
     if gid > MAX_UNPRIV_GROUP then return process.GROUP.SYS end
     return gid
@@ -234,7 +236,7 @@ function process.spawn(fn, opts)
     -- Look at top for rules for this once I write them
     local pgid
     if opts.pgid ~= nil then
-        pgid = normalizeGroup(opts.pgid)
+        pgid = normalizeGroup(opts.pgid, opts.reserved)
     elseif hadActiveParent then
         local parentEntry = table_[ppid]
         pgid = (parentEntry and parentEntry.pgid) or DEFAULT_GROUP

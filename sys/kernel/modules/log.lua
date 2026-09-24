@@ -1,5 +1,6 @@
 -- Yes yes super basic
 -- Ripped metatable shenanigans from syslog
+-- I have a 'super cool' ring buffer library but wont use it since this guy is special
 local scheduler = polaris.scheduler
 
 local maxLines = (polaris.config and polaris.config["kernel_log_buffer_length"]) or 128

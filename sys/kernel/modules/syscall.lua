@@ -3,9 +3,12 @@ local computer = require("computer")
 local event = require("sys.kernel.modules.event")
 
 local function prepareHalt(signal, keepUid)
+    -- Hey guys, prepare to die
     event.push(tostring(signal))
+    polaris.services.halt()
 
     local selfUid = polaris.scheduler.currentThread()
+    -- Still alive? Nah
     polaris.scheduler.killAll(keepUid or selfUid)
     polaris.scheduler.cleanup(event)
     polaris.scheduler.deinit(event, polaris.scheduler.handler)
@@ -107,6 +110,14 @@ polaris.syscalls.execute = function(ctx, path, env)
     end
 
     return fn()
+end
+
+-- Priveleged syscall stuff
+polaris.syscalls.service = function(_, action, name)
+    if action ~= "start" and action ~= "stop" and action ~= "restart" then
+        error("service: unknown action '" .. tostring(action) .. "'", 0)
+    end
+    return polaris.services[action](name)
 end
 
 -- Custom PGIDs

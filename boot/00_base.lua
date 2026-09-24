@@ -1,6 +1,7 @@
 -- Extending functionality for stuff
 -- And modifying global stuff
 local process = polaris.process
+polaris.analytics.addEvent("stage2")
 polaris.env = require("sys.kernel.modules.env")
 
 -- Search by prefix

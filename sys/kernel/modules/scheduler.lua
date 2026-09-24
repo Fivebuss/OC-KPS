@@ -67,6 +67,7 @@ local computer_uptime = computer.uptime
 -- Fancy
 function scheduler.sleep(seconds)
     checkArg(1, seconds, "number")
+    seconds = math.max(0, seconds)
     coroutine_yield("sleep", seconds)
 end
 
@@ -410,6 +411,8 @@ local function tick(...)
     for uid in pairs(thr) do
         table.insert(uids, uid)
     end
+    -- Ordered, yes this matters
+    table.sort(uids)
 
     for _, uid in ipairs(uids) do
         local t = thr[uid]
@@ -467,7 +470,7 @@ local function tick(...)
                             t.onExit(true, "cancelled")
                         end
                     elseif reason == "sleep" and type(b) == "number" then
-                        t.wakeAt = computer.uptime() + b
+                        t.wakeAt = now + b
                         t.waiting = false
                     elseif reason == "readInput" then
                         if t.inputQueue and #t.inputQueue > 0 then
