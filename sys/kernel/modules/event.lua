@@ -48,7 +48,7 @@ computer.pullSignal = function(seconds) -- dispatch
 		if interrupting then
 			lastInterrupt = uptime()
 			if keyboard.isAltDown() then
-				local uid = polaris and polaris.scheduler and polaris.scheduler.currentThread()
+				local uid = polaris and polaris.scheduler and polaris.scheduler.activeThread()
 				if uid then
 					polaris.scheduler.signal(uid, polaris.scheduler.SIG.INT)
 				end

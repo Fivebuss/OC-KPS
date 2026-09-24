@@ -12,5 +12,5 @@ while true do
     i = i + 1
     process.write(name, " log ", i, "\n")
     process.sleep(10)
-    process.checkCancel()
+    coroutine.yield()
 end

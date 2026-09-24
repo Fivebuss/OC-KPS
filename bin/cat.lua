@@ -5,6 +5,7 @@ local process = polaris.process
 
 local chunkSize = 2048
 
+-- I hope pipes work again
 local function chunkRead(reader)
     local count = 0
     local chunk = reader:read(chunkSize)
@@ -17,7 +18,8 @@ local function chunkRead(reader)
 
         count = count + 1
         if count % 16 == 0 then
-            process.checkCancel()
+            local sig = coroutine.yield()
+            if sig then break end
         end
 
         chunk = reader:read(chunkSize)
@@ -30,9 +32,12 @@ if #args == 0 then
         local line, _, noNewline = io.read("l")
         if not line then break end
 
+        -- Lmao how is a signal coming as a line?
+        if process.isSignal(line) then break end
+
         io.write(noNewline and line or (line .. "\n"))
         io.flush()
-        process.checkCancel()
+        coroutine.yield()
     end
     return
 end

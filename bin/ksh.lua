@@ -504,9 +504,14 @@ local function runPipeline(parsedSegments, tempAssigns)
         end
     end
 
+    -- Deal with this weirdness
     if spawnedAny and remaining > 0 then
         fgBusy = true
-        process.waitForInput()
+        while true do
+            local v = process.waitForInput()
+            if v == true then break end
+            -- Child die
+        end
         fgBusy = false
         -- Newline prompt redraw
         if tty.cx > 1 then
@@ -855,8 +860,12 @@ local function shellLoop()
             return
         end
 
-        env.setenv("PWD", currPath)
-        executeLine(line, env.getenv)
+        -- I hope nothing comes back
+        if process.isSignal(line) then
+        else
+            env.setenv("PWD", currPath)
+            executeLine(line, env.getenv)
+        end
     end
 end
 
@@ -866,7 +875,7 @@ shellPid = process.spawn(shellLoop, {
     onExit = function(success, reason)
         computer.beep(2000)
         computer.beep(2000)
-
+        --polaris.debug.print(tostring(success) .. " " .. tostring(reason))
         if tty.attach then
             tty:setCursor(false)
             tty:clear()
@@ -875,6 +884,15 @@ shellPid = process.spawn(shellLoop, {
         end
         process.destroy(shellPid)
     end,
+    -- Yay handlers
+    handlers = {
+        INT = function(uid, sig)
+            drawPrompt()
+        end,
+        HUP = function(uid, sig)
+            drawPrompt()
+        end,
+    },
 })
 
 process.create(shellPid, tty.reader, tty, tty)

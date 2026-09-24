@@ -37,7 +37,7 @@ end
 function log:write(data)
     checkArg(1, data, "string")
 
-    local uid = scheduler.currentThread()
+    local uid = scheduler.activeThread()
     if uid == 1 or uid == nil then
         uid = "kernel"
     else

@@ -104,6 +104,12 @@ for file in filesystem.list("/boot") do
     end
 end
 
+if polaris.config["debug"] == true then
+    _G.polaris.debug = {}
+    _G.polaris.debug.print = status
+end
+
+
 -- So they are in order
 table.sort(bootScripts)
 for i = 1, #bootScripts do

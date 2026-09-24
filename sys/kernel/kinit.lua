@@ -23,7 +23,10 @@ polaris.analytics.addEvent("kinit_start")
 
 -- Yeah this is temporary
 polaris.gpu = gpu
-_G.gpu = nil
+if polaris.config["debug"] ~= true then
+    _G.gpu = nil
+end
+
 -- Load config
 
 require("sys.kernel.modules.config")()

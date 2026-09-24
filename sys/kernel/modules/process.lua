@@ -44,7 +44,7 @@ Functions of this
   process.exit(code): exit the current process
   process.kill(pid): Kills a process without asking
   process.cancel(pid) / process.cancelAll(): ask nicely for one to die
-  process.isCancelled(pid) / process.checkCancel(): checks if TERM
+  process.isCancelled(pid) Terminated?
   process.signal(pid, sig) / process.signalAll(sig): SIG.* spam
   process.pendingSignal(pid)
   process.stop(pid) / process.cont(pid) / process.isStopped(pid): ^Z
@@ -275,7 +275,7 @@ end
 
 -- PID of itself
 function process.self()
-    return scheduler().currentThread()
+    return scheduler().activeThread()
 end
 
 function process.exists(pid)
@@ -542,12 +542,6 @@ function process.isCancelled(pid)
     return scheduler().isCancelled(pid)
 end
 
--- Check if it got told to die
-function process.checkCancel()
-    if isKernelPid(process.self()) then return end
-    return scheduler().checkCancel()
-end
-
 -- Signal stuff
 
 function process.signal(pid, sig)
@@ -569,6 +563,17 @@ end
 function process.pendingSignal(pid)
     if isKernelPid(pid) then return nil end
     return scheduler().pendingSignal(pid)
+end
+
+function process.isSignal(...)
+    return scheduler().isSignal(...)
+end
+
+-- Yields an extra tick! Exists to keep signals arriving
+function process.yield()
+    -- Okay fine one more tick
+    scheduler().yield()
+    return true
 end
 
 -- ^Z / fg
@@ -603,7 +608,7 @@ function process.send(pid, value)
 end
 
 process.sendData = process.send
-process.currentThread = process.self
+process.activeThread = process.self
 
 -- now the i/o side
 

@@ -7,7 +7,7 @@ local function prepareHalt(signal, keepUid)
     event.push(tostring(signal))
     polaris.services.halt()
 
-    local selfUid = polaris.scheduler.currentThread()
+    local selfUid = polaris.scheduler.activeThread()
     -- Still alive? Nah
     polaris.scheduler.killAll(keepUid or selfUid)
     polaris.scheduler.cleanup(event)
@@ -22,7 +22,7 @@ local function call(syscall, ...)
         error("System failure: kernel process not running: " .. tostring(syscall))
     end
 
-    local callerUid = scheduler.currentThread()
+    local callerUid = scheduler.activeThread()
 
     if not callerUid then
         error(

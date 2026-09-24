@@ -377,9 +377,11 @@ function pipeMt.__index:write(...)
         and self._size > self._capacity
         and not self._closedRead
         and not self._closedWrite do
-        self._writerUid = self._scheduler.currentThread()
-        self._scheduler.waitForInput()
-        self._scheduler.checkCancel()
+        self._writerUid = self._scheduler.activeThread()
+        local v = self._scheduler.waitForInput()
+        if self._scheduler.isSignal(v) then
+            return false
+        end
     end
 
     if self._closedRead then
@@ -441,9 +443,11 @@ function pipeMt.__index:read(count)
             return nil
         end
 
-        self._readerUid = self._scheduler.currentThread()
-        self._scheduler.waitForInput()
-        self._scheduler.checkCancel() -- ^C while blocked mid-pipe
+        self._readerUid = self._scheduler.activeThread()
+        local v = self._scheduler.waitForInput()
+        if self._scheduler.isSignal(v) then
+            return nil, v 
+        end
     end
 end
 
@@ -486,9 +490,8 @@ function pipeMt.__index:readLine()
             return nil
         end
 
-        self._readerUid = self._scheduler.currentThread()
+        self._readerUid = self._scheduler.activeThread()
         self._scheduler.waitForInput()
-        self._scheduler.checkCancel()
     end
 end
 
