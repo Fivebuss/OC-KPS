@@ -1,6 +1,6 @@
 -- Polaris syscalls
 local computer = require("computer")
-local event = require("sys.kernel.modules.event")
+local event = require("event")
 
 local function prepareHalt(signal, keepUid)
     -- Hey guys, prepare to die

@@ -20,7 +20,7 @@ services.halt(): Stop dealing with exits
 ]]
 
 local computer = require("computer")
-local event = require("sys.kernel.modules.event")
+local event = require("event")
 local filesystem = require("filesystem")
 local env = require("sys.kernel.modules.env")
 local ring = require("sys.kernel.modules.ringbuffer")

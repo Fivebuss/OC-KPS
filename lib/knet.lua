@@ -2,7 +2,7 @@
 -- Minitel library port time
 
 local computer = require("computer")
-local event = require("sys.kernel.modules.event")
+local event = require("event")
 local filesystem = require("filesystem")
 
 local net = {}

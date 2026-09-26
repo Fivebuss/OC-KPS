@@ -3,7 +3,7 @@
 -- Ported from cynosure. Because it is the best tty library I have used
 
 local unicode = require("unicode")
-local event = require("sys.kernel.modules.event")
+local event = require("event")
 local io = require("sys.kernel.modules.io")
 local computer = require("computer")
 

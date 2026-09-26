@@ -1,10 +1,11 @@
 local computer = require("computer")
-local event = require("sys.kernel.modules.event")
 
-io.write("before\n")
+local event = require("event")
 
-local start = computer.uptime()
+io.write("waiting...\n")
 
-event.pull(2)
+local sig, addr, char, code = event.pull("key_down")
 
-io.write("after 2 seconds\n")
+io.write("got: " .. tostring(sig) .. "\n")
+io.write("char: " .. tostring(char) .. "\n")
+io.write("code: " .. tostring(code) .. "\n")

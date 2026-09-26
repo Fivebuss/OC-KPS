@@ -121,5 +121,12 @@ for i = 1, #bootScripts do
 end
 
 -- Enter scheduler loop
+-- No matter what you do, no matter how hard you try you will always be in a busy loop lmao
 computer.pushSignal("init")
-require("sys.kernel.modules.event").pull("init", 1)
+
+local event_internals =
+    require("sys.kernel.modules.event_internals")
+
+while true do
+    event_internals.pullSignal()
+end

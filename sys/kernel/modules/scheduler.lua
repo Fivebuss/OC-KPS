@@ -39,7 +39,7 @@ Default actions (used when no handler is attached):
 scheduler.sleep(seconds) -> sig|nil      (now returns a delivered signal, if any)
 scheduler.waitForInput() -> value|sig    (a signal can preempt queued input)
 scheduler.yield() -> sig|nil             sleep(0). cheap checkpoint, use in loops
-scheduler.isSignal(v) -> boolean 
+scheduler.isSignal(v) -> boolean
 scheduler.lastSignal(uid) -> sig, ..
 scheduler.sendData(uid, value) -> boolean
 scheduler.activeThread() -> uid or nil
@@ -62,11 +62,12 @@ scheduler.cancelAll()
 --]]
 
 local computer = require("computer")
-local event = require("sys.kernel.modules.event")
+local event = require("sys.kernel.modules.event_internals")
 local scheduler = {}
 local handlers = {}
 
 local unpack = table.unpack or unpack
+local pack = table.pack or pack
 
 scheduler.SIG = {
     INT  = "INT",  -- Ctrl+C, thread can choose to exit or not (attach a handler)
@@ -106,6 +107,7 @@ local coroutine_status = coroutine.status
 local computer_uptime = computer.uptime
 local math_max = math.max
 local math_huge = math.huge
+
 
 -- Helpful stuff
 
@@ -163,6 +165,10 @@ local function reap(uid, t)
         t.spawnedAt = nil
         t.stopped = nil
         t.sleepRemaining = nil
+
+        t.eventFilter = nil
+        t.eventDeadline = nil
+        t.resumeArgs = nil
         poolCount = poolCount + 1
         pool[poolCount] = t
     end
@@ -221,6 +227,14 @@ function scheduler.waitForInput()
     return coroutine_yield("readInput")
 end
 
+-- Event fix
+function scheduler.waitForEvent(timeout, filter)
+    checkArg(1, timeout, "number", "nil")
+    checkArg(2, filter, "function", "nil")
+
+    return coroutine_yield("event", timeout, filter)
+end
+
 -- Oh look, im yielding a singular tick. Who wouldve thought.
 function scheduler.yield()
     return coroutine_yield("sleep", 0)
@@ -241,7 +255,7 @@ function scheduler.sendData(uid, value)
     -- I need this bad
     inputPush(t, value)
 
-    if t.waiting then
+    if t.waiting and not t.eventFilter then
         t.waiting = false
         t.hasResume = true
         t.resumeVal = inputShift(t)
@@ -282,12 +296,16 @@ function scheduler.signal(uid, sig, ...)
     end
     -- CHLD does nothing
 
-    -- Hey, wakeup!
-    if t.wakeAt ~= nil then
-        t.wakeAt = 0
-    end
+    -- Hey, wakeup! and prioritize event signals
     if t.waiting then
         t.waiting = false
+
+        if t.eventFilter then
+            t.eventFilter = nil
+            t.eventDeadline = nil
+            t.resumeArgs = nil
+        end
+
         t.hasResume = false
         t.resumeVal = nil
     end
@@ -344,6 +362,10 @@ function scheduler.spawn(fn, onExit, label, handlers)
     t.waiting = false
     t.hasResume = false
     t.resumeVal = nil
+    -- Fix events
+    t.eventFilter = nil
+    t.eventDeadline = nil
+    t.resumeArgs = nil
     t.inputQueue = nil
     t.inputHead = nil
     t.inputCount = nil
@@ -493,6 +515,11 @@ function scheduler.cancel(uid)
     -- Unblock input
     if t.waiting then
         t.waiting = false
+
+        t.eventFilter = nil
+        t.eventDeadline = nil
+        t.resumeArgs = nil
+
         t.hasResume = true
         t.resumeVal = nil
     end
@@ -525,6 +552,11 @@ function scheduler.exit(code)
     -- Unblock input
     if t.waiting then
         t.waiting = false
+
+        t.eventFilter = nil
+        t.eventDeadline = nil
+        t.resumeArgs = nil
+
         t.hasResume = true
         t.resumeVal = nil
     end
@@ -586,6 +618,32 @@ function scheduler.deinit(event, handlerId)
     end
 end
 
+-- This bigass function handles event pulling
+local function wakeEventWaiters(...)
+    local args = pack(...)
+
+    for _, t in pairs(threads) do
+        if t.waiting and t.eventFilter then
+            local ok, matched = pcall(
+                t.eventFilter,
+                unpack(args, 1, args.n)
+            )
+
+            if ok and matched then
+                t.waiting = false
+                t.eventFilter = nil
+                t.eventDeadline = nil
+
+                t.hasResume = true
+                t.resumeVal = nil
+                t.resumeArgs = args
+
+                t.wakeAt = nil
+            end
+        end
+    end
+end
+
 -- Tick
 local function tick(...)
     if threadCount == 0 then return end
@@ -593,6 +651,29 @@ local function tick(...)
     local thr = threads
     local now = computer_uptime()
     local oc = orderCount
+
+    -- Oh boy
+    if select("#", ...) > 0 then -- never used select before
+        wakeEventWaiters(...)
+    end
+
+    for _, t in pairs(thr) do
+        if
+            t.waiting
+            and t.eventFilter
+            and t.eventDeadline
+            and now >= t.eventDeadline
+        then
+            t.waiting = false
+            t.eventFilter = nil
+            t.eventDeadline = nil
+
+            t.hasResume = true
+            t.resumeVal = nil
+            t.resumeArgs = nil
+        end
+    end
+
 
     local i = 1
     while i <= oc do
@@ -613,10 +694,21 @@ local function tick(...)
                     t.signalArgs = nil
                     ok, a, b, c = coroutine_resume(t.co, sig)
                 elseif t.hasResume then
+                    local args = t.resumeArgs
                     local v = t.resumeVal
+
                     t.hasResume = false
                     t.resumeVal = nil
-                    ok, a, b, c = coroutine_resume(t.co, v)
+                    t.resumeArgs = nil
+
+                    if args then
+                        ok, a, b, c = coroutine_resume(
+                            t.co,
+                            table.unpack(args, 1, args.n)
+                        )
+                    else
+                        ok, a, b, c = coroutine_resume(t.co, v)
+                    end
                 elseif t.wakeAt ~= nil then
                     ok, a, b, c = coroutine_resume(t.co)
                 else
@@ -685,6 +777,13 @@ local function tick(...)
                             t.wakeAt = nil
                             t.waiting = true
                         end
+                    elseif reason == "event" then
+                        t.eventFilter = c
+                        t.eventDeadline =
+                            b and (now + math_max(0, b)) or math_huge
+
+                        t.wakeAt = nil
+                        t.waiting = true
                     else
                         t.wakeAt = nil
                         t.waiting = false
@@ -702,7 +801,9 @@ function scheduler.init(event, tickInterval)
     checkArg(2, tickInterval, "number", "nil")
 
     local interval = tickInterval or 0.1
-    local handlerId = event.timer(interval, tick, math_huge)
+    local handlerId = event.timer(interval, function()
+        tick()
+    end, math_huge)
 
     -- Allowing multiple (in theory)
     handlers[handlerId] = interval

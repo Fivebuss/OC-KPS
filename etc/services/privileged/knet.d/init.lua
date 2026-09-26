@@ -16,7 +16,7 @@ data: the actual packet data, duh.
 local process = polaris.process
 local name = ...
 
-local event = require("sys.kernel.modules.event")
+local event = require("event")
 local component = require("component")
 local computer = require("computer")
 local filesystem = require("filesystem")
