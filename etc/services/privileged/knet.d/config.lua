@@ -3,7 +3,7 @@ return {
     label = "knetd",         -- yay minitel port. "KPS net"
     priority = 200,         -- I am early
     onExit = "stop",
-    autostart = true,
+    autostart = false,
     restartDelay = 5,
     stopTimeout = 5,
 }

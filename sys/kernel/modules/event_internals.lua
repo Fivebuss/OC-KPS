@@ -125,7 +125,7 @@ function event.pullSignal(seconds)
             lastInterrupt = uptime()
 
             if keyboard.isAltDown() then
-                -- Keep your existing Ctrl+Alt+C behavior if desired.
+                -- Interrupt
                 local uid =
                     polaris and
                     polaris.scheduler and

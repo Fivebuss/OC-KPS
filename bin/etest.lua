@@ -4,8 +4,6 @@ local event = require("event")
 
 io.write("waiting...\n")
 
-local sig, addr, char, code = event.pull("key_down")
+local out = event.pull("beacon")
 
-io.write("got: " .. tostring(sig) .. "\n")
-io.write("char: " .. tostring(char) .. "\n")
-io.write("code: " .. tostring(code) .. "\n")
+io.write(out)

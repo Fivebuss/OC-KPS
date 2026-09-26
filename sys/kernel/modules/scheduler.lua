@@ -801,9 +801,9 @@ function scheduler.init(event, tickInterval)
     checkArg(2, tickInterval, "number", "nil")
 
     local interval = tickInterval or 0.1
-    local handlerId = event.timer(interval, function()
-        tick()
-    end, math_huge)
+    local handlerId = event.register(nil, function(...)
+        tick(...)
+    end, interval, math_huge)
 
     -- Allowing multiple (in theory)
     handlers[handlerId] = interval

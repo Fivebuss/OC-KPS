@@ -429,6 +429,7 @@ local function runPipeline(parsedSegments, tempAssigns)
                     local env = polaris.env.current()
                     env.console = console
                     env.args = argv(seg.args)
+                    env.ctty = tty -- current tty, I am too lazy to deal with /dev/tty* bs and this is far easier for me
                     env.setenv("PWD", currPath)
                     if segIdx == 1 and tempEnvValues then
                         for name, value in pairs(tempEnvValues) do

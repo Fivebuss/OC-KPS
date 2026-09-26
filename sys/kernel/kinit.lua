@@ -21,7 +21,7 @@ end
 
 polaris.analytics.addEvent("kinit_start")
 
--- Yeah this is temporary
+-- Yeah this is temporary. GPU and console driver in one, I will 100% seperate them lol. So far ksh just grabs polaris.gpu and binds tty to it, and sets polaris.gpu.tty to the tty ref
 polaris.gpu = gpu
 if polaris.config["debug"] ~= true then
     _G.gpu = nil

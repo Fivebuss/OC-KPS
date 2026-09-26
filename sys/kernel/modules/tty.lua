@@ -730,6 +730,15 @@ function tty.new(gpu)
 
     -- Calling this just registers with a uid instead
 
+    -- This makes my life easier
+    function self:suspendInput()
+        self.suspended = true
+    end
+
+    function self:resumeInput()
+        self.suspended = false
+    end
+
     function self:attach(uid)
         self.attachedUids[uid] = true
     end
@@ -744,6 +753,7 @@ function tty.new(gpu)
 
     -- Key handling is goofy with this event library. May change
     function self:onKeyDown(char, code)
+        if self.suspended then return end
         if char == 0 and code == 0 then return end
         if self.attributes.xoff then return end
 
