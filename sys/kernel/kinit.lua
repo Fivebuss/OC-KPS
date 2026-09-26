@@ -48,6 +48,7 @@ polaris.process = require("sys.kernel.modules.process")
 --- Logging
 polaris.log = require("sys.kernel.modules.log")
 local function log(...) polaris.log(...) end
+function _G.klog(...) log(...) end
 log("log initialized for " .. tostring(polaris.version.kernel))
 log("Registered base modules: buffer, io, process, config, scheduler, log")
 

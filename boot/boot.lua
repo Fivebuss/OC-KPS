@@ -96,6 +96,9 @@ status("Executing stage 2 boot")
 
 -- Now that things have been prepared
 
+-- Tell the system that initialization is complete.
+computer.pushSignal("kinit")
+
 local bootScripts = {}
 for file in filesystem.list("/boot") do
     local path = "/boot/" .. file
@@ -117,7 +120,6 @@ for i = 1, #bootScripts do
     dofile(bootScripts[i])
 end
 
--- Tell the system that initialization is complete.
-computer.pushSignal("init")
 -- Enter scheduler loop
+computer.pushSignal("init")
 require("sys.kernel.modules.event").pull("init", 1)

@@ -24,7 +24,8 @@
     "serialization",
     "term",
     "Commands",
-    "os"
+    "os",
+        "kps"
   ],
   "Lua.format.enable": true,
   "Lua.diagnostics.neededFileStatus": {

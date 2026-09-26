@@ -638,6 +638,7 @@ local function tick(...)
                     end
                     notifyChildExit(parent, uid, true, exitCode)
                 elseif not ok then
+                    if klog then klog("Scheduler: tick failure: coroutine error! | " .. tostring(a)) end
                     local onExit = t.onExit
                     local parent = reap(uid, t)
                     if onExit then onExit(false, a) end
