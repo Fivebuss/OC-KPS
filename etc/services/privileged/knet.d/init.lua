@@ -94,11 +94,25 @@ local function readAll(path, mode)
     return table.concat(chunks)
 end
 
+local debugQueue = {}
+
 local function dprint(...)
     if cfg.debug then
-        process.write(...)
-        process.write("\n")
+        local n = select("#", ...)
+        local parts = { ... }
+        for i = 1, n do
+            parts[i] = tostring(parts[i])
+        end
+        debugQueue[#debugQueue + 1] = table.concat(parts, "\t")
     end
+end
+
+local function flushDebug()
+    if #debugQueue == 0 then return end
+    for i = 1, #debugQueue do
+        process.write(debugQueue[i], "\n")
+    end
+    debugQueue = {}
 end
 
 local function saveconfig()
@@ -147,8 +161,7 @@ local function sendPacket(packetID, packetType, dest, sender, vPort, data, repea
             vPort, data)
         -- strip NAT suffix for sending without messing with the cache
         local vlan = checkVlan(rcache[dest][1], rcache[dest][4])
-        local ndest = (vlan and vlan.suffix and dest:sub(- #vlan.suffix) == vlan.suffix and dest:sub(1, #vlan.suffix - 1)) or
-            dest
+        local ndest = (vlan and vlan.suffix and dest:sub(-#vlan.suffix) == vlan.suffix and dest:sub(1, #dest - #vlan.suffix)) or dest
         if vlan ~= repeatingFrom or (vlan.type ~= "tunnel" and vlan.isWireless()) then
             if vlan.type == "modem" then
                 vlan.send(rcache[dest][2], rcache[dest][4], packetID, packetType, ndest, sender, vPort, data)
@@ -165,7 +178,7 @@ local function sendPacket(packetID, packetType, dest, sender, vPort, data, repea
                 -- also, if a NAT suffix is set, check the packet matches before broadcasting
                 and (not v.suffix or dest:sub(- #v.suffix) == v.suffix) then
                 -- strip NAT suffix before broadcast
-                local ndest = (v.suffix and dest:sub(- #v.suffix) == v.suffix and dest:sub(1, #v.suffix - 1)) or dest
+                local ndest = (v.suffix and dest:sub(- #v.suffix) == v.suffix and dest:sub(1, #dest - #v.suffix)) or dest
                 if v.type == "modem" then
                     v.broadcast(v.vlan, packetID, packetType, ndest, sender, vPort, data)
                 elseif v.type == "tunnel" then
@@ -205,7 +218,7 @@ local function processPacket(_, localModem, from, pport, _, packetID, packetType
     pruneCache()
     -- add the NAT suffix
     local vlan = checkVlan(localModem, pport)
-    sender = sender .. (vlan.suffix or "")
+    sender = sender .. (vlan and vlan.suffix or "")
     if vlan or pport == 0 then -- for linked cards
         dprint(cfg.port, vPort, packetType, dest)
         if checkPCache(packetID) then return end
@@ -217,6 +230,7 @@ local function processPacket(_, localModem, from, pport, _, packetID, packetType
             nil
         if dest == hostname then
             if packetType == 1 then
+                
                 sendPacket(genPacketID(), 2, sender, hostname, vPort, packetID)
             end
             if packetType == 2 then
@@ -368,13 +382,14 @@ event.listen("net_send", queuePacket)
 
 timers[#timers + 1] = event.timer(0, packetPusher, math.huge)
 
-listeners["net_ack"] = dprint
-event.listen("net_ack", dprint)
+--listeners["net_ack"] = dprint
+--event.listen("net_ack", dprint)
 
 process.write(name, ": knet daemon running\n")
 
 while not process.isCancelled(process.self()) do
     process.sleep(1)
+    flushDebug()
     coroutine.yield()
 end
 
