@@ -3,7 +3,7 @@
 
 -- I hope this works
 local process = polaris.process
-local io = require("sys.kernel.modules.io")
+local io = require("io")
 
 polaris.config["tty.profile"] = 7
 _G.console = polaris.tty.new(polaris.gpu)

@@ -4,7 +4,7 @@
 
 local unicode = require("unicode")
 local event = require("event")
-local io = require("sys.kernel.modules.io")
+local io = require("io")
 local computer = require("computer")
 
 -- Process does it's job

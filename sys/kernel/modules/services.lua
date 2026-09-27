@@ -22,8 +22,8 @@ services.halt(): Stop dealing with exits
 local computer = require("computer")
 local event = require("event")
 local filesystem = require("filesystem")
-local env = require("sys.kernel.modules.env")
-local ring = require("sys.kernel.modules.ringbuffer")
+local env = require("env")
+local ring = require("ringbuffer")
 
 local process = polaris.process
 local kernelEnv = _G

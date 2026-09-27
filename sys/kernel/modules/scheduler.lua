@@ -62,7 +62,7 @@ scheduler.cancelAll()
 --]]
 
 local computer = require("computer")
-local event = require("sys.kernel.modules.event_internals")
+local event = require("event_internals")
 local scheduler = {}
 local handlers = {}
 

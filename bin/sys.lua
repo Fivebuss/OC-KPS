@@ -5,13 +5,12 @@
 -- sys [-v]   status
 -- sys -c     syscalls
 -- sys -e     current environment
--- sys -m     loaded kernel modules
 -- sys -b     boot time stuff
 
 local getopt = require("getopt")
 
 local want, verbose = {}, false
-local longSpec = { syscalls = "c", env = "e", modules = "m", boot = "b", verbose = "v" }
+local longSpec = { syscalls = "c", env = "e", boot = "b", verbose = "v" }
 for opt, val in getopt(args, "cembv", longSpec) do
     if opt == "v" then
         verbose = true
@@ -33,10 +32,6 @@ local function sortedNames(t)
     return out
 end
 
-local function modules()
-    return package.loadedNames("sys")
-end
-
 local function status()
     local total, free = computer.totalMemory(), computer.freeMemory()
     local names = polaris.services.list()
@@ -55,7 +50,6 @@ local function status()
     if verbose then
         row("Threads", polaris.scheduler.threadCount())
         row("Syscalls", #sortedNames(polaris.syscalls))
-        row("Modules", #modules())
         row("Environment", #sortedNames(_ENV) .. " entries")
         for _, key in ipairs(sortedNames(polaris.config)) do
             row("config." .. key, polaris.config[key])
@@ -73,11 +67,6 @@ local function environment()
     end
 end
 
-local function loadedModules()
-    local names = modules()
-    table.sort(names)
-    for _, name in ipairs(names) do io.writeln(name) end
-end
 
 local EVENTS = {
     { "kinit_start", "kinit start" },
@@ -116,7 +105,6 @@ end
 local sections = {
     { "c", "syscalls", syscalls },
     { "e", "environment", environment },
-    { "m", "modules", loadedModules },
     { "b", "boot", boot },
 }
 

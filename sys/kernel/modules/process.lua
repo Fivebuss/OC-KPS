@@ -68,7 +68,7 @@ Functions of this
   process.describe(pid)
 --]]
 
-local io = require("sys.kernel.modules.io")
+local io = require("io")
 
 local process = {}
 

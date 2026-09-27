@@ -38,7 +38,7 @@ if gpu then
     gpu.fill(1, 1, w, h, " ")
 end
 
-local function status(msg)
+function _G.status(msg)
     if not gpu then
         return
     end
@@ -125,7 +125,7 @@ end
 computer.pushSignal("init")
 
 local event_internals =
-    require("sys.kernel.modules.event_internals")
+    require("event_internals")
 
 while true do
     event_internals.pullSignal()

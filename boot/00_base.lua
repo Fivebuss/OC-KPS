@@ -2,24 +2,7 @@
 -- And modifying global stuff
 local process = polaris.process
 polaris.analytics.addEvent("stage2")
-polaris.env = require("sys.kernel.modules.env")
-
--- Search by prefix
-function package.loadedNames(prefix)
-    checkArg(1, prefix, "string")
-
-    local result = {}
-
-    for name in pairs(package.loaded) do
-        if name == prefix or name:sub(1, #prefix + 1) == prefix .. "." then
-            table.insert(result, name)
-        end
-    end
-
-    return result
-end
-
-polaris.loadedModules = package.loadedNames("sys")
+polaris.env = require("env")
 
 -- Replace os.sleep
 function os.sleep(n)
@@ -116,7 +99,7 @@ function dofile(path)
     return fn()
 end
 
--- Just an alias really to process.spawn really
+-- Just an alias really to process.spawn
 function os.execute(path, opts)
     checkArg(1, path, "string")
     checkArg(2, opts, "table", "nil")

@@ -1,7 +1,7 @@
 -- /lib/event.lua
 
-local event = require("sys.kernel.modules.event_internals")
-local scheduler = require("sys.kernel.modules.scheduler")
+local event = require("event_internals")
+local scheduler = require("scheduler")
 
 local M = {}
 
