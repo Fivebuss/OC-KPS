@@ -5,6 +5,7 @@ local process = polaris.process
 polaris.analytics.addEvent("ksh")
 local filesystem = require("filesystem")
 local io = polaris.io
+local text = require("text")
 
 -- Errors exist yay
 local function writeRed(stream, ...)
@@ -156,102 +157,26 @@ local function expandVars(str, getenv)
     return out, failMsg
 end
 
--- -- Tokenizer is miles shorter, thanks text library
-local function splitAndChain(line)
-    local groups = {}
-    local current = {}
-    local inD, inS = false, false
-    local i, len = 1, #line
-
-    while i <= len do
-        local c = line:sub(i, i)
-        if c == '"' and not inS then
-            inD = not inD
-            current[#current + 1] = c
-        elseif c == "'" and not inD then
-            inS = not inS
-            current[#current + 1] = c
-        elseif c == "&" and line:sub(i + 1, i + 1) == "&" and not inD and not inS then
-            groups[#groups + 1] = table.concat(current)
+-- Text library is amazing
+local function splitTokensOn(tokens, op)
+    local groups, current = {}, {}
+    for _, tok in ipairs(tokens) do
+        if tok == op then
+            groups[#groups + 1] = current
             current = {}
-            i = i + 1 -- skip the second &
         else
-            current[#current + 1] = c
+            current[#current + 1] = tok
         end
-        i = i + 1
     end
-    groups[#groups + 1] = table.concat(current)
+    groups[#groups + 1] = current
     return groups
 end
 
--- Splits on | outside quote
-local function splitPipes(line)
-    local segments = {}
-    local current = {}
-    local inD, inS = false, false
-
-    for i = 1, #line do
-        local c = line:sub(i, i)
-        if c == '"' and not inS then
-            inD = not inD
-            current[#current + 1] = c
-        elseif c == "'" and not inD then
-            inS = not inS
-            current[#current + 1] = c
-        elseif c == "|" and not inD and not inS then
-            segments[#segments + 1] = table.concat(current)
-            current = {}
-        else
-            current[#current + 1] = c
-        end
-    end
-    segments[#segments + 1] = table.concat(current)
-    return segments
-end
-
--- Elseif elseif elseif
--- Yes tokenizing is still a better idea
-local function tokenize(segment)
-    local words = {}
-    local current = {}
-    local inD, inS = false, false
-    local i, len = 1, #segment
-
-    local function flush()
-        if #current > 0 then
-            words[#words + 1] = table.concat(current)
-            current = {}
-        end
-    end
-
-    while i <= len do
-        local c = segment:sub(i, i)
-        if c == '"' and not inS then
-            inD = not inD
-            current[#current + 1] = c
-        elseif c == "'" and not inD then
-            inS = not inS
-            current[#current + 1] = c
-        elseif c:match("%s") and not inD and not inS then
-            flush()
-        elseif c == "<" and not inD and not inS then
-            flush()
-            words[#words + 1] = "<"
-        elseif c == ">" and not inD and not inS then
-            flush()
-            if segment:sub(i + 1, i + 1) == ">" then
-                words[#words + 1] = ">>"
-                i = i + 1
-            else
-                words[#words + 1] = ">"
-            end
-        else
-            current[#current + 1] = c
-        end
-        i = i + 1
-    end
-    flush()
-    return words
+-- Okay text library time
+local function tokenize(line)
+    local tokens, err = text.tokenize(line)
+    if not tokens then return nil, err end
+    return tokens
 end
 
 -- Wildcard shenanigans are in shell for once
@@ -322,14 +247,13 @@ local function expandWildcard(str)
     return matches
 end
 
--- Grabs < > >> for now, expands stuff
-local function parseSegment(segment, getenv)
-    local words = tokenize(segment)
+-- Grabs < > >> N> N>> N< &N> &N>> &N<
+local function parseSegment(words, getenv)
     if #words == 0 then
         return nil, "empty command"
     end
 
-    -- This is cursed
+    -- Alias expansion
     local maxDepth = 10
     while maxDepth > 0 and words[1] and aliases[words[1]] do
         maxDepth = maxDepth - 1
@@ -341,23 +265,22 @@ local function parseSegment(segment, getenv)
                 local idx = tonumber(m:sub(2))
                 return restArgs[idx] or ""
             end):gsub("%$%@", table.concat(restArgs, " ")):gsub("%$%*", table.concat(restArgs, " "))
-            words = tokenize(expanded)
+            local newToks, err = tokenize(expanded)
+            if not newToks then return nil, err end
+            words = newToks
             break
         else
-            local aliasWords = tokenize(aliasVal)
+            local aliasWords, err = tokenize(aliasVal)
+            if not aliasWords then return nil, err end
             local newWords = {}
-            for _, w in ipairs(aliasWords) do
-                newWords[#newWords + 1] = w
-            end
-            for k = 2, #words do
-                newWords[#newWords + 1] = words[k]
-            end
+            for _, w in ipairs(aliasWords) do newWords[#newWords + 1] = w end
+            for k = 2, #words do newWords[#newWords + 1] = words[k] end
             words = newWords
         end
     end
 
     local args = {}
-    local redirects = { stdinFile = nil, stdoutFile = nil, appendOut = false }
+    local redirects = { stdinFile = nil, stdoutFile = nil, appendOut = false, fdRedirects = {} }
     local i = 1
     local expandFail
     local function expand(w)
@@ -369,9 +292,7 @@ local function parseSegment(segment, getenv)
         local isQuoted = (#w >= 2) and
             ((w:sub(1, 1) == '"' and w:sub(-1) == '"') or (w:sub(1, 1) == "'" and w:sub(-1) == "'"))
         local expanded = expand(w)
-        if isQuoted then
-            return { expanded }
-        end
+        if isQuoted then return { expanded } end
         return expandWildcard(expanded)
     end
 
@@ -392,11 +313,50 @@ local function parseSegment(segment, getenv)
             redirects.appendOut = true
             i = i + 2
         else
-            local expandedList = dealWithToken(w)
-            for _, item in ipairs(expandedList) do
-                args[#args + 1] = item
+            -- &N> &N>> &N< and N> N>> N< fd this is not even a finished list
+            local fd, op = w:match("^&(%d+)(>>?)$")
+            if not fd then fd, op = w:match("^&(%d+)(<)$") end
+            if not fd then fd, op = w:match("^(%d+)(>>?)$") end
+            if not fd then fd, op = w:match("^(%d+)(<)$") end
+
+            if fd then
+                fd = tonumber(fd)
+                if not words[i + 1] then return nil, "missing filename after " .. w end
+                local rawTarget = words[i + 1]
+                -- &N works for real
+                local aliasFd = rawTarget:match("^&(%d+)$")
+
+                if aliasFd then
+                    aliasFd = tonumber(aliasFd)
+                    redirects.fdAliases = redirects.fdAliases or {}
+                    redirects.fdAliases[fd] = aliasFd
+                else
+                    local target = dealWithToken(rawTarget)[1]
+                    if fd == 0 or op == "<" then
+                        redirects.stdinFile = target
+                    elseif fd == 1 then
+                        redirects.stdoutFile = target
+                        redirects.appendOut = (op == ">>")
+                    elseif fd == 2 then
+                        redirects.stderrFile = target
+                        redirects.appendStderr = (op == ">>")
+                    else
+                        redirects.fdRedirects[fd] = {
+                            file = target,
+                            append = (op == ">>"),
+                            mode = (op == "<") and "r" or
+                                "w"
+                        }
+                    end
+                end
+                i = i + 2
+            else
+                local expandedList = dealWithToken(w)
+                for _, item in ipairs(expandedList) do
+                    args[#args + 1] = item
+                end
+                i = i + 1
             end
-            i = i + 1
         end
     end
 
@@ -447,7 +407,7 @@ end
 
 -- Decides fd0/1/2 or tty
 local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
-    local stdin, stdout
+    local stdin, stdout, stderr
 
     if redirects.stdinFile then
         local full = resolvePath(currPath, redirects.stdinFile)
@@ -476,7 +436,37 @@ local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
         stdout = outPipe or ttyOutPassthrough()
     end
 
-    return stdin, stdout, ttyOutPassthrough()
+    if redirects.stderrFile then
+        local full = resolvePath(currPath, redirects.stderrFile)
+        if filesystem.isDirectory(full) then
+            return nil, nil, nil, ioErr("is a directory", redirects.stderrFile)
+        end
+        local stream, reason = openForOutput(full, redirects.appendStderr)
+        if not stream then return nil, nil, nil, ioErr(reason, redirects.stderrFile) end
+        stderr = stream
+    else
+        stderr = ttyOutPassthrough()
+    end
+
+    -- Yay fd aliasing
+    if redirects.fdAliases then
+        local resolved = { [0] = stdin, [1] = stdout, [2] = stderr }
+        for dst, src in pairs(redirects.fdAliases) do
+            local stream = resolved[src]
+            if not stream then
+                return nil, nil, nil, "bad file descriptor: &" .. src
+            end
+            if dst == 0 then
+                stdin = stream
+            elseif dst == 1 then
+                stdout = stream
+            elseif dst == 2 then
+                stderr = stream
+            end
+        end
+    end
+
+    return stdin, stdout, stderr
 end
 
 -- Now with $PATH
@@ -1383,9 +1373,20 @@ local function splitAssignments(words)
 end
 
 -- Everything but &&
-local function runCommandGroup(line, getenv)
-    -- KEY=value
-    local words = tokenize(line)
+local function runCommandGroup(lineOrTokens, getenv)
+    local words
+    if type(lineOrTokens) == "table" then
+        words = lineOrTokens
+    else
+        local err
+        words, err = tokenize(lineOrTokens)
+        if not words then
+            writeRed(tty, "ksh: tokenize error: " .. tostring(err), "\n")
+            lastExitCode = 2
+            return
+        end
+    end
+
     local assigns, rest = splitAssignments(words)
 
     if #assigns > 0 and #rest == 0 then
@@ -1406,7 +1407,7 @@ local function runCommandGroup(line, getenv)
             savedNames[#savedNames + 1] = a.name
             locals[a.name] = expandVars(a.value, getenv)
         end
-        line = table.concat(rest, " ")
+        words = rest
     end
 
     local function restoreLocals()
@@ -1416,11 +1417,11 @@ local function runCommandGroup(line, getenv)
         end
     end
 
-    local rawSegments = splitPipes(line)
+    local pipeGroups = splitTokensOn(words, "|")
     local parsed = {}
 
-    for _, raw in ipairs(rawSegments) do
-        local seg, err, isParamError = parseSegment(raw, getenv)
+    for _, segTokens in ipairs(pipeGroups) do
+        local seg, err, isParamError = parseSegment(segTokens, getenv)
         if not seg then
             if isParamError then
                 writeRed(tty, "ksh: " .. err, "\n")
@@ -1511,16 +1512,25 @@ local function executeLine(line, getenv)
     line = table.concat(stripped)
     if line:match("^%s*$") then return end
 
-    local groups = splitAndChain(line)
+    local tokens, err = tokenize(line)
+    if not tokens then
+        writeRed(tty, "ksh: syntax error: " .. tostring(err), "\n")
+        lastExitCode = 2
+        return
+    end
+    if #tokens == 0 then return end
 
-    for _, group in ipairs(groups) do
-        if group:match("^%s*$") then
+    -- Split on && tokens lol
+    local groups = splitTokensOn(tokens, "&&")
+
+    for _, groupTokens in ipairs(groups) do
+        if #groupTokens == 0 then
             writeRed(tty, "ksh: syntax error near '&&'", "\n")
             lastExitCode = 2
             return
         end
 
-        runCommandGroup(group, getenv)
+        runCommandGroup(groupTokens, getenv)
 
         if lastExitCode ~= 0 then
             -- && skip

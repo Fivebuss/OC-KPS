@@ -131,6 +131,7 @@ local function socket(addr, port, sclose)
         conn.state = "closed"
         net.rsend(addr, port, sclose)
     end
+
     return conn
 end
 

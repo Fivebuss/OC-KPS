@@ -110,7 +110,7 @@ function serialization.serialize(value, pretty)
                         table.insert(result_pack, "\n" .. string.rep(" ", depth))
                     end
                 end
----@diagnostic disable-next-line: cast-local-type
+                ---@diagnostic disable-next-line: cast-local-type
                 first = nil
                 local tk = type(k)
                 if tk == "number" and k == i then

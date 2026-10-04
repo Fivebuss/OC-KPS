@@ -18,15 +18,15 @@ local function createPlainFilter(name, ...)
         local signal = table.pack(...)
 
         if name and not (
-            type(signal[1]) == "string"
-            and signal[1]:match(name)
-        ) then
+                type(signal[1]) == "string"
+                and signal[1]:match(name)
+            ) then
             return false
         end
 
         for i = 1, filter.n do
             if filter[i] ~= nil
-               and filter[i] ~= signal[i + 1] then
+                and filter[i] ~= signal[i + 1] then
                 return false
             end
         end
@@ -51,7 +51,7 @@ local function createMultipleFilter(...)
 
         for i = 1, filter.n do
             if filter[i] ~= nil
-               and signal[1]:match(filter[i]) then
+                and signal[1]:match(filter[i]) then
                 return true
             end
         end

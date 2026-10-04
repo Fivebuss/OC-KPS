@@ -1,5 +1,4 @@
 -- /bin/cat.lua
--- Here goes nothing!
 local filesystem = require("filesystem")
 local process = polaris.process
 
@@ -26,8 +25,8 @@ local function chunkRead(reader)
     end
 end
 
-if #args == 0 then
-    -- Interactive mode
+-- interactive
+local function readStdin()
     while true do
         local line, _, noNewline = io.read("l")
         if not line then break end
@@ -39,31 +38,55 @@ if #args == 0 then
         io.flush()
         coroutine.yield()
     end
-    return
 end
 
-if #args > 1 then
-    io.writelnError("cat: too many arguments")
-    return
+local function processTarget(rawArg)
+    -- '-' is stdin
+    if rawArg == "-" then
+        readStdin()
+        return true
+    end
+
+    local target = console and console.stripQuotes(rawArg) or rawArg
+    local fullPath = console and console.resolvePath(console.currPath(), target) or target
+
+    if not filesystem.exists(fullPath) then
+        io.writelnError("cat: " .. rawArg .. ": No such file or directory")
+        return false
+    end
+
+    if filesystem.isDirectory(fullPath) then
+        io.writelnError("cat: " .. rawArg .. ": Is a directory")
+        return false
+    end
+
+    local handle, reason = filesystem.open(fullPath, "rb")
+    if not handle then
+        handle, reason = filesystem.open(fullPath, "r")
+    end
+
+    if not handle then
+        io.writelnError("cat: " .. rawArg .. ": Cannot open file: " .. tostring(reason))
+        return false
+    end
+
+    chunkRead(handle)
+    handle:close()
+    return true
 end
 
-local firstArg = args[1]
-local target = console.stripQuotes(firstArg)
-local fullPath = console.resolvePath(console.currPath(), target)
+-- Begin
+if #args == 0 then
+    readStdin()
+else
+    local hasError = false
+    for _, arg in ipairs(args) do
+        if not processTarget(arg) then
+            hasError = true
+        end
+    end
 
-if not filesystem.exists(fullPath) or filesystem.isDirectory(fullPath) then
-    io.writelnError("cat: " .. firstArg .. ": No such file")
-    return
+    if hasError then
+        os.exit(1)
+    end
 end
-
-local handle, reason = filesystem.open(fullPath, "rb")
-if not handle then
-    handle, reason = filesystem.open(fullPath, "r")
-end
-if not handle then
-    io.writelnError("cat: " .. firstArg .. ": Cannot open file: " .. tostring(reason))
-    return
-end
-
-chunkRead(handle)
-handle:close()
