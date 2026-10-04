@@ -6,28 +6,6 @@ polaris.analytics.addEvent("ksh")
 local filesystem = require("filesystem")
 local io = polaris.io
 
-local path = "/bin:/sbin"
-
-local function splitPath(p)
-    local parts = {}
-    for entry in p:gmatch("[^:]+") do
-        table.insert(parts, entry)
-    end
-    return parts
-end
-
-local pathDirs = splitPath(path)
-
-local function resolveCommand(name)
-    for _, dir in ipairs(pathDirs) do
-        local candidate = filesystem.concat(dir, name .. ".lua")
-        if filesystem.exists(candidate) and not filesystem.isDirectory(candidate) then
-            return candidate
-        end
-    end
-    return nil
-end
-
 -- Errors exist yay
 local function writeRed(stream, ...)
     stream:write("\27[31m")
@@ -67,6 +45,8 @@ local fgBusy = false -- true while a foreground pipeline is actually running
 
 -- Just for the shell
 local locals = {}
+local scriptArgs = nil
+local aliases = {}
 
 -- PWD
 local currPath = "/"
@@ -113,12 +93,23 @@ local console = {
 
 -- Hmmm
 local function lookupVar(name, getenv)
+    if scriptArgs then
+        if name == "0" then return scriptArgs[1] or "" end
+        local num = tonumber(name)
+        if num then return scriptArgs[num + 1] or "" end
+        if name == "#" then return tostring(math.max(0, #scriptArgs - 1)) end
+        if name == "@" or name == "*" then
+            local t = {}
+            for i = 2, #scriptArgs do t[#t + 1] = scriptArgs[i] end
+            return table.concat(t, " ")
+        end
+    end
     local v = locals[name]
     if v ~= nil then return v end
     return getenv(name)
 end
 
--- support for :-  :=  :+  :? 
+-- support for :-  :=  :+  :?
 local function applyOperator(name, op, arg, value)
     if value ~= nil and value ~= "" then
         if op == "+" then return arg end
@@ -136,7 +127,7 @@ local function applyOperator(name, op, arg, value)
     return "" -- :+ with unset value
 end
 
--- Todo: make better
+-- Todo: make better. Not yet!
 local function expandVars(str, getenv)
     local failMsg
     local out = str:gsub("%$%b{}", function(tok)
@@ -153,6 +144,12 @@ local function expandVars(str, getenv)
     end)
     out = out:gsub("%$%?", tostring(lastExitCode))
     out = out:gsub("%$%$", tostring(shellPid or 0))
+    out = out:gsub("%$([%d]+)", function(num)
+        return lookupVar(num, getenv) or ""
+    end)
+    out = out:gsub("%$([#@*0])", function(sym)
+        return lookupVar(sym, getenv) or ""
+    end)
     out = out:gsub("%$([%a_][%w_]*)", function(name)
         return lookupVar(name, getenv) or ""
     end)
@@ -257,11 +254,106 @@ local function tokenize(segment)
     return words
 end
 
+-- Wildcard shenanigans are in shell for once
+local function expandWildcard(str)
+    if not (str:find("*") or str:find("?")) then
+        return { str }
+    end
+
+    local dirPrefix, pat
+    if str:find("/") then
+        dirPrefix = filesystem.path(str)
+        pat = filesystem.name(str)
+    else
+        dirPrefix = ""
+        pat = str
+    end
+
+    local searchDir = (dirPrefix == "") and currPath or resolvePath(currPath, dirPrefix)
+    if not filesystem.exists(searchDir) or not filesystem.isDirectory(searchDir) then
+        return { str }
+    end
+
+    -- I do not know why the carrot is called pat.
+    -- Not my code anyway but its nice
+    local luaPat = "^"
+    for idx = 1, #pat do
+        local c = pat:sub(idx, idx)
+        if c == "*" then
+            luaPat = luaPat .. ".*"
+        elseif c == "?" then
+            luaPat = luaPat .. "."
+        elseif c:match("%W") then
+            luaPat = luaPat .. "%" .. c
+        else
+            luaPat = luaPat .. c
+        end
+    end
+    luaPat = luaPat .. "$"
+
+    local patStartsWithDot = (pat:sub(1, 1) == ".")
+    local matches = {}
+
+    for entry in filesystem.list(searchDir) do
+        local name = filesystem.canonical(entry)
+        if name ~= "." and name ~= ".." then
+            local isHidden = (name:sub(1, 1) == ".")
+            if not isHidden or patStartsWithDot then
+                if name:match(luaPat) then
+                    local fullMatch
+                    if dirPrefix == "/" then
+                        fullMatch = "/" .. name
+                    elseif dirPrefix ~= "" then
+                        fullMatch = dirPrefix .. name
+                    else
+                        fullMatch = name
+                    end
+                    table.insert(matches, fullMatch)
+                end
+            end
+        end
+    end
+
+    if #matches == 0 then
+        return { str }
+    end
+
+    table.sort(matches)
+    return matches
+end
+
 -- Grabs < > >> for now, expands stuff
 local function parseSegment(segment, getenv)
     local words = tokenize(segment)
     if #words == 0 then
         return nil, "empty command"
+    end
+
+    -- This is cursed
+    local maxDepth = 10
+    while maxDepth > 0 and words[1] and aliases[words[1]] do
+        maxDepth = maxDepth - 1
+        local aliasVal = aliases[words[1]]
+        if aliasVal:find("%$%d") or aliasVal:find("%$%@") or aliasVal:find("%$%*") then
+            local restArgs = {}
+            for k = 2, #words do restArgs[#restArgs + 1] = words[k] end
+            local expanded = aliasVal:gsub("%$%d+", function(m)
+                local idx = tonumber(m:sub(2))
+                return restArgs[idx] or ""
+            end):gsub("%$%@", table.concat(restArgs, " ")):gsub("%$%*", table.concat(restArgs, " "))
+            words = tokenize(expanded)
+            break
+        else
+            local aliasWords = tokenize(aliasVal)
+            local newWords = {}
+            for _, w in ipairs(aliasWords) do
+                newWords[#newWords + 1] = w
+            end
+            for k = 2, #words do
+                newWords[#newWords + 1] = words[k]
+            end
+            words = newWords
+        end
     end
 
     local args = {}
@@ -273,24 +365,37 @@ local function parseSegment(segment, getenv)
         expandFail = expandFail or failMsg
         return out
     end
+    local function dealWithToken(w)
+        local isQuoted = (#w >= 2) and
+            ((w:sub(1, 1) == '"' and w:sub(-1) == '"') or (w:sub(1, 1) == "'" and w:sub(-1) == "'"))
+        local expanded = expand(w)
+        if isQuoted then
+            return { expanded }
+        end
+        return expandWildcard(expanded)
+    end
+
     while i <= #words do
         local w = words[i]
         if w == "<" then
             if not words[i + 1] then return nil, "missing filename after <" end
-            redirects.stdinFile = expand(words[i + 1])
+            redirects.stdinFile = dealWithToken(words[i + 1])[1]
             i = i + 2
         elseif w == ">" then
             if not words[i + 1] then return nil, "missing filename after >" end
-            redirects.stdoutFile = expand(words[i + 1])
+            redirects.stdoutFile = dealWithToken(words[i + 1])[1]
             redirects.appendOut = false
             i = i + 2
         elseif w == ">>" then
             if not words[i + 1] then return nil, "missing filename after >>" end
-            redirects.stdoutFile = expand(words[i + 1])
+            redirects.stdoutFile = dealWithToken(words[i + 1])[1]
             redirects.appendOut = true
             i = i + 2
         else
-            args[#args + 1] = expand(w)
+            local expandedList = dealWithToken(w)
+            for _, item in ipairs(expandedList) do
+                args[#args + 1] = item
+            end
             i = i + 1
         end
     end
@@ -335,6 +440,11 @@ local function openForOutput(full, append)
     return io.newFileStream(full, append and "a" or "w")
 end
 
+-- error reason: path
+local function ioErr(reason, path)
+    return tostring(reason) .. ": " .. path
+end
+
 -- Decides fd0/1/2 or tty
 local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
     local stdin, stdout
@@ -342,10 +452,13 @@ local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
     if redirects.stdinFile then
         local full = resolvePath(currPath, redirects.stdinFile)
         if not filesystem.exists(full) then
-            return nil, nil, nil, "no such file: " .. redirects.stdinFile
+            return nil, nil, nil, ioErr("no such file or directory", redirects.stdinFile)
+        end
+        if filesystem.isDirectory(full) then
+            return nil, nil, nil, ioErr("is a directory", redirects.stdinFile)
         end
         local stream, reason = io.newFileStream(full, "r")
-        if not stream then return nil, nil, nil, tostring(reason) end
+        if not stream then return nil, nil, nil, ioErr(reason, redirects.stdinFile) end
         stdin = stream
     else
         stdin = inPipe or fallbackStdin or io.newStream()
@@ -353,8 +466,11 @@ local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
 
     if redirects.stdoutFile then
         local full = resolvePath(currPath, redirects.stdoutFile)
+        if filesystem.isDirectory(full) then
+            return nil, nil, nil, ioErr("is a directory", redirects.stdoutFile)
+        end
         local stream, reason = openForOutput(full, redirects.appendOut)
-        if not stream then return nil, nil, nil, tostring(reason) end
+        if not stream then return nil, nil, nil, ioErr(reason, redirects.stdoutFile) end
         stdout = stream
     else
         stdout = outPipe or ttyOutPassthrough()
@@ -363,8 +479,44 @@ local function makeStreams(inPipe, outPipe, redirects, fallbackStdin)
     return stdin, stdout, ttyOutPassthrough()
 end
 
+-- Now with $PATH
+local function resolveCommand(name, getenv)
+    -- Direct path
+    if name:find("/") then
+        local full = resolvePath(currPath, name)
+        if filesystem.exists(full) and not filesystem.isDirectory(full) then
+            return full
+        end
+        if filesystem.exists(full .. ".lua") and not filesystem.isDirectory(full .. ".lua") then
+            return full .. ".lua"
+        end
+        return nil
+    end
+
+    -- Lookup by PATH
+    local pathStr = lookupVar("PATH", getenv)
+    if not pathStr or pathStr == "" then
+        pathStr = "/bin:/sbin"
+    end
+
+    -- Keep looking
+    for dir in pathStr:gmatch("[^:]+") do
+        local searchDir = resolvePath(currPath, dir)
+        local candidate = filesystem.concat(searchDir, name)
+
+        if filesystem.exists(candidate) and not filesystem.isDirectory(candidate) then
+            return candidate
+        end
+        if filesystem.exists(candidate .. ".lua") and not filesystem.isDirectory(candidate .. ".lua") then
+            return candidate .. ".lua"
+        end
+    end
+
+    return nil
+end
+
 -- Runs pipeline
-local function runPipeline(parsedSegments, tempAssigns)
+local function runPipeline(parsedSegments, tempAssigns, getenv)
     local segCount = #parsedSegments
     local pipes = {}
     for i = 1, segCount - 1 do
@@ -409,7 +561,7 @@ local function runPipeline(parsedSegments, tempAssigns)
         local inPipe = pipes[segIdx - 1]
         local outPipe = pipes[segIdx]
         local builtin = builtins[seg.args[1]]
-        local resolved = not builtin and resolveCommand(seg.args[1])
+        local resolved = not builtin and resolveCommand(seg.args[1], getenv)
 
         if not builtin and not resolved then
             writeRed(tty, "ksh: command not found: " .. tostring(seg.args[1]), "\n")
@@ -550,8 +702,8 @@ function builtins.cd(args, _, _, _)
     lastExitCode = 0
 end
 
--- Just -n for now
-function builtins.echo(args, stdin, stdout, stderr)
+-- Echo echo echo...
+builtins["echo"] = function(args, stdin, stdout, stderr)
     local noNewline = false
     local interpretEscapes = false
     local words = {}
@@ -570,7 +722,6 @@ function builtins.echo(args, stdin, stdout, stderr)
             noNewline = true
             interpretEscapes = true
         elseif arg == "--" then
-            -- End of options
             i = i + 1
             while i <= #args do
                 words[#words + 1] = args[i]
@@ -588,22 +739,42 @@ function builtins.echo(args, stdin, stdout, stderr)
 
     if interpretEscapes then
         -- Some basic stuff
-        line = line:gsub("\\([\\abfnrtv])", function(c)
-            local escapes = {
-                ["\\"] = "\\",
-                ["a"] = "\7",
-                ["b"] = "\b",
-                ["f"] = "\f",
-                ["n"] = "\n",
-                ["r"] = "\r",
-                ["t"] = "\t",
-                ["v"] = "\v",
-            }
+        local escapes = {
+            ["\\"] = "\\",
+            ["a"] = "\7",
+            ["b"] = "\b",
+            ["f"] = "\f",
+            ["n"] = "\n",
+            ["r"] = "\r",
+            ["t"] = "\t",
+            ["v"] = "\v",
+            ["e"] = "\27",
+            ["E"] = "\27",
+        }
 
+        line = line:gsub("\\([\\abefnrtvE])", function(c)
             return escapes[c]
         end)
 
-        -- \0NNN, because I can
+        -- \xNN hex (WHY WOULD YOU USE THIS)
+        line = line:gsub("\\x(%x%x)", function(hex)
+            local n = tonumber(hex, 16)
+            return n and string.char(n) or ("\x00" .. hex)
+        end)
+
+        -- \uNNNN unicode
+        line = line:gsub("\\u(%x%x%x%x)", function(hex)
+            local n = tonumber(hex, 16)
+            return n and unicode.char(n) or ("\\u" .. hex)
+        end)
+
+        -- \UNNNNNNNN more unicode
+        line = line:gsub("\\U(%x%x%x%x%x%x%x%x)", function(hex)
+            local n = tonumber(hex, 16)
+            return n and unicode.char(n) or ("\\U" .. hex)
+        end)
+
+        -- \0NNN octal
         line = line:gsub("\\0(%d%d?%d?)", function(octal)
             local n = tonumber(octal, 8)
             return n and string.char(n) or ("\0" .. octal)
@@ -621,13 +792,13 @@ function builtins.echo(args, stdin, stdout, stderr)
     lastExitCode = 0
 end
 
-function builtins.pwd(args, stdin, stdout, stderr)
+builtins["pwd"] = function(args, stdin, stdout, stderr)
     stdout:write(currPath, "\n")
     lastExitCode = 0
 end
 
 -- hey local variable, congratulations on migrating
-function builtins.export(args, stdin, stdout, stderr)
+builtins["export"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()
 
     if #args == 0 then
@@ -652,7 +823,7 @@ function builtins.export(args, stdin, stdout, stderr)
 end
 
 -- goodbye variable
-function builtins.unset(args, stdin, stdout, stderr)
+builtins["unset"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()
     for _, name in ipairs(args) do
         locals[name] = nil
@@ -662,7 +833,7 @@ function builtins.unset(args, stdin, stdout, stderr)
 end
 
 -- set hopefully works
-function builtins.set(args, stdin, stdout, stderr)
+builtins["set"] = function(args, stdin, stdout, stderr)
     if #args == 0 then
         local env = polaris.env.current()
         local seen = {}
@@ -685,6 +856,510 @@ function builtins.set(args, stdin, stdout, stderr)
             locals[name] = value
         end
     end
+    lastExitCode = 0
+end
+-- omg aliasing finally
+builtins["alias"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        for k, v in pairs(aliases) do
+            stdout:write("alias " .. k .. "='" .. v .. "'\n")
+        end
+        lastExitCode = 0
+        return
+    end
+    for _, arg in ipairs(args) do
+        local name, val = arg:match("^([%w_%-]+)=(.*)$")
+        if name then
+            aliases[name] = stripQuotes(val)
+        else
+            if aliases[arg] then
+                stdout:write("alias " .. arg .. "='" .. aliases[arg] .. "'\n")
+            else
+                writeRed(tty, "alias: " .. arg .. ": not found\n")
+                lastExitCode = 1
+                return
+            end
+        end
+    end
+    lastExitCode = 0
+end
+
+builtins["unalias"] = function(args, stdin, stdout, stderr)
+    for _, arg in ipairs(args) do
+        aliases[arg] = nil
+    end
+    lastExitCode = 0
+end
+
+builtins["type"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        lastExitCode = 0
+        return
+    end
+
+    local env = polaris.env.current()
+    local hasError = false
+    for _, name in ipairs(args) do
+        if aliases[name] then
+            stdout:write(name .. " is an alias for " .. aliases[name] .. "\n")
+        elseif builtins[name] then
+            stdout:write(name .. " is a shell builtin\n")
+        else
+            local cmdPath = resolveCommand(name, env.getenv)
+            if cmdPath then
+                stdout:write(name .. " is " .. cmdPath .. "\n")
+            else
+                stderr:write("ksh: type: " .. name .. ": not found\n")
+                hasError = true
+            end
+        end
+    end
+
+    lastExitCode = hasError and 1 or 0
+end
+
+builtins["true"] = function(args, stdin, stdout, stderr)
+    lastExitCode = 0
+end
+
+builtins["false"] = function(args, stdin, stdout, stderr)
+    lastExitCode = 1
+end
+
+
+
+-- Oh boy. Printf. Time to copy MShell again
+builtins["printf"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        stderr:write("ksh: printf: missing format string\n")
+        lastExitCode = 1
+        return
+    end
+
+    local fmt = args[1]
+    local printArgs = {}
+    for k = 2, #args do printArgs[#printArgs + 1] = args[k] end
+
+    local function utf8Char(code) -- How tf did I get to where im doing math for letters
+        code = math.floor(tonumber(code) or 0)
+        if code < 0 then return "" end
+        if unicode and unicode.char then
+            local ok, res = pcall(unicode.char, code)
+            if ok and res then return res end
+        end
+        if code <= 0x7F then
+            return string.char(code)
+        elseif code <= 0x7FF then
+            return string.char(
+                0xC0 + math.floor(code / 64),
+                0x80 + (code % 64)
+            )
+        elseif code <= 0xFFFF then
+            return string.char(
+                0xE0 + math.floor(code / 4096),
+                0x80 + (math.floor(code / 64) % 64),
+                0x80 + (code % 64)
+            )
+        elseif code <= 0x10FFFF then
+            return string.char(
+                0xF0 + math.floor(code / 262144),
+                0x80 + (math.floor(code / 4096) % 64),
+                0x80 + (math.floor(code / 64) % 64),
+                0x80 + (code % 64)
+            )
+        end
+        return ""
+    end
+
+    -- Pattern time. No, I am not insane enough to come up with these. AI did.
+    local function uWLen(s)
+        if unicode and unicode.wlen then return unicode.wlen(s) end
+        if unicode and unicode.len then return unicode.len(s) end
+        return #s
+    end
+
+    local function uSub(s, i, j)
+        if unicode and unicode.sub then return unicode.sub(s, i, j) end
+        local t = {}
+        for c in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do t[#t + 1] = c end
+        j = j or #t
+        local res = {}
+        for idx = i, math.min(j, #t) do res[#res + 1] = t[idx] end
+        return table.concat(res)
+    end
+
+    local function shellQuote(s)
+        s = tostring(s == nil and "" or s)
+        if s == "" then return "''" end
+        if s:match("^[%w_%-%.%/%+=]+$") then return s end
+        return "'" .. s:gsub("'", "'\\''") .. "'"
+    end
+
+    local function groupDigits(str)
+        local intPart, decPart = str:match("^([^%.]+)(.*)$")
+        intPart = intPart or str
+        decPart = decPart or ""
+        local k
+        while true do
+            intPart, k = intPart:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+            if k == 0 then break end
+        end
+        return intPart .. decPart
+    end
+
+    local function toBinary(n)
+        n = math.floor(tonumber(n) or 0)
+        if n == 0 then return "0" end
+        local t = {}
+        local isNeg = false
+        if n < 0 then
+            isNeg = true; n = math.abs(n)
+        end
+        while n > 0 do
+            table.insert(t, 1, tostring(n % 2))
+            n = math.floor(n / 2)
+        end
+        local res = table.concat(t)
+        return isNeg and ("-" .. res) or res
+    end
+
+    local function expandBackslashes(str)
+        local res = {}
+        local idx = 1
+        local slen = #str
+        while idx <= slen do
+            local c = str:sub(idx, idx)
+            if c == "\\" then
+                if idx == slen then return nil, "trailing backslash" end
+                local nxt = str:sub(idx + 1, idx + 1)
+                -- gross if else spam
+                if nxt == "n" then
+                    res[#res + 1] = "\n"; idx = idx + 2
+                elseif nxt == "r" then
+                    res[#res + 1] = "\r"; idx = idx + 2
+                elseif nxt == "t" then
+                    res[#res + 1] = "\t"; idx = idx + 2
+                elseif nxt == "b" then
+                    res[#res + 1] = "\b"; idx = idx + 2
+                elseif nxt == "f" then
+                    res[#res + 1] = "\f"; idx = idx + 2
+                elseif nxt == "v" then
+                    res[#res + 1] = "\v"; idx = idx + 2
+                elseif nxt == "a" then
+                    res[#res + 1] = "\7"; idx = idx + 2
+                elseif nxt == "\\" then
+                    res[#res + 1] = "\\"; idx = idx + 2
+                elseif nxt == "0" then
+                    res[#res + 1] = "\0"; idx = idx + 2
+                elseif nxt == "c" then
+                    return table.concat(res), "halt"
+                elseif nxt == "x" then
+                    local hex = str:sub(idx + 2):match("^%x%x")
+                    if not hex then return nil, "invalid hex escape sequence" end
+                    local code = tonumber(hex, 16)
+                    res[#res + 1] = utf8Char(code)
+                    idx = idx + 2 + #hex
+                elseif nxt == "u" and str:sub(idx + 2, idx + 2) == "{" then
+                    local hex, subLen = str:sub(idx + 3):match("^(%x+)%}()")
+                    if not hex then return nil, "invalid unicode escape sequence" end
+                    local code = tonumber(hex, 16)
+                    res[#res + 1] = utf8Char(code)
+                    idx = idx + 3 + subLen - 1
+                else
+                    return nil, "unknown escape sequence '\\" .. nxt .. "'"
+                end
+            else
+                res[#res + 1] = c
+                idx = idx + 1
+            end
+        end
+        return table.concat(res), nil
+    end
+
+    local argSeqIdx = 1
+    local totalArgs = #printArgs
+
+    local function getArg(pos)
+        local idx = pos or argSeqIdx
+        if not pos then argSeqIdx = argSeqIdx + 1 end
+        if idx < 1 or idx > totalArgs then
+            return nil, "missing argument"
+        end
+        return printArgs[idx], nil
+    end
+
+    local output = {}
+    local halted = false
+
+    repeat
+        local startSeqIdx = argSeqIdx
+        local i = 1
+        local len = #fmt
+
+        while i <= len do
+            local c = fmt:sub(i, i)
+            if c == "\\" then
+                if i == len then
+                    stderr:write("ksh: printf: trailing backslash in format string\n")
+                    lastExitCode = 1
+                    return
+                end
+                local nxt = fmt:sub(i + 1, i + 1)
+                -- spam musubi
+                if nxt == "n" then
+                    output[#output + 1] = "\n"; i = i + 2
+                elseif nxt == "r" then
+                    output[#output + 1] = "\r"; i = i + 2
+                elseif nxt == "t" then
+                    output[#output + 1] = "\t"; i = i + 2
+                elseif nxt == "b" then
+                    output[#output + 1] = "\b"; i = i + 2
+                elseif nxt == "f" then
+                    output[#output + 1] = "\f"; i = i + 2
+                elseif nxt == "v" then
+                    output[#output + 1] = "\v"; i = i + 2
+                elseif nxt == "a" then
+                    output[#output + 1] = "\7"; i = i + 2
+                elseif nxt == "\\" then
+                    output[#output + 1] = "\\"; i = i + 2
+                elseif nxt == "0" then
+                    output[#output + 1] = "\0"; i = i + 2
+                elseif nxt == "c" then
+                    halted = true
+                    break
+                elseif nxt == "x" then
+                    local hex = fmt:sub(i + 2):match("^%x%x")
+                    if not hex then
+                        stderr:write("ksh: printf: invalid hex escape sequence\n")
+                        lastExitCode = 1
+                        return
+                    end
+                    local code = tonumber(hex, 16)
+                    output[#output + 1] = utf8Char(code)
+                    i = i + 2 + #hex
+                elseif nxt == "u" and fmt:sub(i + 2, i + 2) == "{" then
+                    local hex, subLen = fmt:sub(i + 3):match("^(%x+)%}()")
+                    if not hex then
+                        stderr:write("ksh: printf: invalid unicode escape sequence\n")
+                        lastExitCode = 1
+                        return
+                    end
+                    local code = tonumber(hex, 16)
+                    output[#output + 1] = utf8Char(code)
+                    i = i + 3 + subLen - 1
+                else
+                    stderr:write("ksh: printf: unknown escape sequence '\\" .. nxt .. "'\n")
+                    lastExitCode = 1
+                    return
+                end
+            elseif c == "%" then
+                if fmt:sub(i + 1, i + 1) == "%" then
+                    output[#output + 1] = "%"
+                    i = i + 2
+                else
+                    local pos1 = i + 1
+                    local valPos = nil
+                    local pNum, pLen = fmt:sub(pos1):match("^(%d+)%$()")
+                    if pNum then
+                        valPos = tonumber(pNum)
+                        pos1 = pos1 + pLen - 1
+                    end
+
+                    local flags = { hash = false, quote = false, plus = false, space = false, minus = false, zero = false }
+                    while pos1 <= len do
+                        local fl = fmt:sub(pos1, pos1)
+                        if fl == "#" then
+                            flags.hash = true
+                        elseif fl == "'" then
+                            flags.quote = true
+                        elseif fl == "+" then
+                            flags.plus = true
+                        elseif fl == " " then
+                            flags.space = true
+                        elseif fl == "-" then
+                            flags.minus = true
+                        elseif fl == "0" then
+                            flags.zero = true
+                        else
+                            break
+                        end
+                        pos1 = pos1 + 1
+                    end
+
+                    local width = nil
+                    local wNum, wLen = fmt:sub(pos1):match("^(%d+)()")
+                    if wNum then
+                        width = tonumber(wNum)
+                        pos1 = pos1 + wLen - 1
+                    elseif fmt:sub(pos1, pos1) == "*" then
+                        pos1 = pos1 + 1
+                        local wPosNum, wPosLen = fmt:sub(pos1):match("^(%d+)%$()")
+                        local wArgPos = wPosNum and tonumber(wPosNum) or nil
+                        if wPosNum then pos1 = pos1 + wPosLen - 1 end
+                        local wVal, err = getArg(wArgPos)
+                        if err then
+                            stderr:write("ksh: printf: " .. err .. "\n"); lastExitCode = 1; return
+                        end
+                        local wNumVal = tonumber(wVal) or 0
+                        if wNumVal < 0 then
+                            flags.minus = true
+                            width = math.abs(wNumVal)
+                        else
+                            width = wNumVal
+                        end
+                    end
+
+                    local precision = nil
+                    if fmt:sub(pos1, pos1) == "." then
+                        pos1 = pos1 + 1
+                        local prNum, prLen = fmt:sub(pos1):match("^(%d+)()")
+                        if prNum then
+                            precision = tonumber(prNum)
+                            pos1 = pos1 + prLen - 1
+                        elseif fmt:sub(pos1, pos1) == "*" then
+                            pos1 = pos1 + 1
+                            local prPosNum, prPosLen = fmt:sub(pos1):match("^(%d+)%$()")
+                            local prArgPos = prPosNum and tonumber(prPosNum) or nil
+                            if prPosNum then pos1 = pos1 + prPosLen - 1 end
+                            local prVal, err = getArg(prArgPos)
+                            if err then
+                                stderr:write("ksh: printf: " .. err .. "\n"); lastExitCode = 1; return
+                            end
+                            local prNumVal = tonumber(prVal)
+                            if prNumVal and prNumVal >= 0 then
+                                precision = prNumVal
+                            end
+                        else
+                            precision = 0
+                        end
+                    end
+
+                    if pos1 > len then
+                        stderr:write("ksh: printf: incomplete format specifier\n")
+                        lastExitCode = 1
+                        return
+                    end
+
+                    local typeChar = fmt:sub(pos1, pos1)
+                    pos1 = pos1 + 1
+                    i = pos1
+
+                    local rawVal, err = getArg(valPos)
+                    if err then
+                        stderr:write("ksh: printf: " .. err .. "\n")
+                        lastExitCode = 1
+                        return
+                    end
+
+                    local formattedStr = ""
+
+                    if typeChar == "s" then
+                        local str = tostring(rawVal == nil and "nil" or rawVal)
+                        if precision then
+                            str = uSub(str, 1, precision)
+                        end
+                        formattedStr = str
+                    elseif typeChar == "q" then
+                        formattedStr = shellQuote(rawVal)
+                    elseif typeChar == "c" then
+                        local num = tonumber(rawVal)
+                        if num then
+                            formattedStr = utf8Char(num)
+                        else
+                            formattedStr = uSub(tostring(rawVal or ""), 1, 1)
+                        end
+                    elseif typeChar == "b" then
+                        local num = tonumber(rawVal)
+                        if num then
+                            if num % 1 ~= 0 then
+                                stderr:write("ksh: printf: expected integer, got float\n")
+                                lastExitCode = 1
+                                return
+                            end
+                            formattedStr = (flags.hash and "0b" or "") .. toBinary(num)
+                        else
+                            local expanded, expErr = expandBackslashes(tostring(rawVal or ""))
+                            if expErr and expErr ~= "halt" then
+                                stderr:write("ksh: printf: " .. expErr .. "\n")
+                                lastExitCode = 1
+                                return
+                            end
+                            formattedStr = expanded or ""
+                        end
+                    elseif typeChar:match("^[diuoxX]$") then
+                        local num = tonumber(rawVal)
+                        if not num or num % 1 ~= 0 then
+                            stderr:write("ksh: printf: expected integer, got '" .. tostring(rawVal) .. "'\n")
+                            lastExitCode = 1
+                            return
+                        end
+                        if typeChar == "d" or typeChar == "i" then
+                            local sign = ""
+                            if num >= 0 then
+                                if flags.plus then
+                                    sign = "+"
+                                elseif flags.space then
+                                    sign = " "
+                                end
+                            end
+                            formattedStr = sign .. string.format("%.0f", num)
+                        elseif typeChar == "u" then
+                            formattedStr = string.format("%.0f", math.abs(num))
+                        elseif typeChar == "o" then
+                            formattedStr = (flags.hash and num ~= 0 and "0o" or "") .. string.format("%o", num)
+                        elseif typeChar == "x" then
+                            formattedStr = (flags.hash and "0x" or "") .. string.format("%x", num)
+                        elseif typeChar == "X" then
+                            formattedStr = (flags.hash and "0X" or "") .. string.format("%X", num)
+                        end
+                        if flags.quote then
+                            formattedStr = groupDigits(formattedStr)
+                        end
+                    elseif typeChar:match("^[feEgG]$") then
+                        local num = tonumber(rawVal) or 0
+                        local fmtSpec = "%" ..
+                            (flags.plus and "+" or (flags.space and " " or "")) ..
+                            (precision and ("." .. precision) or "") .. typeChar
+                        formattedStr = string.format(fmtSpec, num)
+                        if flags.quote then
+                            formattedStr = groupDigits(formattedStr)
+                        end
+                    elseif typeChar == "p" then
+                        formattedStr = string.format("%p", rawVal) or tostring(rawVal)
+                    else
+                        stderr:write("ksh: printf: unknown conversion specifier '%" .. typeChar .. "'\n")
+                        lastExitCode = 1
+                        return
+                    end
+
+                    local displayWidth = uWLen(formattedStr)
+                    if width and width > displayWidth then
+                        local padLen = width - displayWidth
+                        if flags.minus then
+                            formattedStr = formattedStr .. string.rep(" ", padLen)
+                        elseif flags.zero and typeChar:match("^[diuoxXbfeEgG]$") then
+                            local signPrefix = formattedStr:match("^[%+%- %0x0X0o0b]+") or ""
+                            local rest = formattedStr:sub(#signPrefix + 1)
+                            formattedStr = signPrefix .. string.rep("0", padLen) .. rest
+                        else
+                            formattedStr = string.rep(" ", padLen) .. formattedStr
+                        end
+                    end
+
+                    output[#output + 1] = formattedStr
+                end
+            else
+                output[#output + 1] = c
+                i = i + 1
+            end
+        end
+
+        if halted then break end
+        if totalArgs == 0 then break end
+        if argSeqIdx <= startSeqIdx then break end
+    until argSeqIdx > totalArgs
+
+    stdout:write(table.concat(output))
     lastExitCode = 0
 end
 
@@ -813,12 +1488,27 @@ local function runCommandGroup(line, getenv)
         return
     end
 
-    runPipeline(parsed, saved and assigns)
+    runPipeline(parsed, saved and assigns, getenv)
     restoreLocals()
 end
 
 local function executeLine(line, getenv)
     line = line:gsub("[\r\n]+$", "")
+    -- # is comment
+    local stripped = {}
+    local inD, inS = false, false
+    for i = 1, #line do
+        local c = line:sub(i, i)
+        if c == '"' and not inS then
+            inD = not inD
+        elseif c == "'" and not inD then
+            inS = not inS
+        elseif c == "#" and not inD and not inS then
+            break
+        end
+        stripped[#stripped + 1] = c
+    end
+    line = table.concat(stripped)
     if line:match("^%s*$") then return end
 
     local groups = splitAndChain(line)
@@ -839,16 +1529,142 @@ local function executeLine(line, getenv)
     end
 end
 
+-- I am lazy so we just natively source stuff
+local function sourceFile(path, getenv)
+    local full = resolvePath(currPath, path)
+    if not filesystem.exists(full) then return end
+    if filesystem.isDirectory(full) then
+        writeRed(tty, "ksh: " .. ioErr("is a directory", path), "\n")
+        return
+    end
+    local f, reason = io.newFileStream(full, "r")
+    if not f then
+        writeRed(tty, "ksh: " .. ioErr(reason, path), "\n")
+        return
+    end
+    local buf = {}
+    while true do
+        local chunk = f:read(math.huge)
+        if not chunk then break end
+        buf[#buf + 1] = chunk
+    end
+    f:close()
+    for line in table.concat(buf):gmatch("[^\n]+") do
+        executeLine(line, getenv)
+    end
+end
+
+-- Run then exit
+local function runScript(path, getenv)
+    local full = resolvePath(currPath, path)
+    if not filesystem.exists(full) then
+        writeRed(tty, "ksh: " .. ioErr("no such file or directory", path), "\n")
+        process.exit(1)
+    end
+    if filesystem.isDirectory(full) then
+        writeRed(tty, "ksh: " .. ioErr("is a directory", path), "\n")
+        process.exit(1)
+    end
+    local f, reason = io.newFileStream(full, "r")
+    if not f then
+        writeRed(tty, "ksh: " .. ioErr(reason, path), "\n")
+        process.exit(1)
+    end
+    local buf = {}
+    while true do
+        local chunk = f:read(math.huge)
+        if not chunk then break end
+        buf[#buf + 1] = chunk
+    end
+    f:close()
+    for line in table.concat(buf):gmatch("[^\n]+") do
+        executeLine(line, getenv)
+    end
+    process.exit(lastExitCode)
+end
+
+
+-- Fix ksh <file> obliterating the universe
+local function execScriptFile(path, args, getenv)
+    local full = resolvePath(currPath, path)
+    if not filesystem.exists(full) then
+        writeRed(tty, "ksh: " .. ioErr("no such file or directory", path), "\n")
+        lastExitCode = 1
+        return
+    end
+    if filesystem.isDirectory(full) then
+        writeRed(tty, "ksh: " .. ioErr("is a directory", path), "\n")
+        lastExitCode = 1
+        return
+    end
+    local f, reason = io.newFileStream(full, "r")
+    if not f then
+        writeRed(tty, "ksh: " .. ioErr(reason, path), "\n")
+        lastExitCode = 1
+        return
+    end
+    local buf = {}
+    while true do
+        local chunk = f:read(math.huge)
+        if not chunk then break end
+        buf[#buf + 1] = chunk
+    end
+    f:close()
+
+    local oldLocals = locals
+    local oldScriptArgs = scriptArgs
+    locals = {}
+    for k, v in pairs(oldLocals) do locals[k] = v end
+    scriptArgs = args
+
+    for line in table.concat(buf):gmatch("[^\n]+") do
+        executeLine(line, getenv)
+    end
+
+    -- Restore parent scope
+    locals = oldLocals
+    scriptArgs = oldScriptArgs
+end
+
+-- "Hey why are builtins so low down" its because im lazy
+builtins["sh"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        writeRed(tty, "sh: missing script file argument\nIf you are trying to create a subshell, it wont work for now\n")
+        lastExitCode = 1
+        return
+    end
+    execScriptFile(args[1], args, polaris.env.current().getenv)
+end
+
+builtins["ksh"] = builtins["sh"]
+
+builtins["source"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then return end
+    sourceFile(args[1], polaris.env.current().getenv)
+end
+builtins["."] = builtins["source"]
+
 -- Loop. I hate this.
 
 local function shellLoop()
-    tty:clear()
-    tty:write("ksh loaded\n")
-    polaris.analytics.addEvent("console")
-
     local stdin = process.input()
     local env = polaris.env.current()
     env.setenv("PWD", currPath)
+    if not env.getenv("PATH") then
+        env.setenv("PATH", "/bin:/sbin")
+    end
+
+    -- Non-interactive script execution
+    local scriptPath = env.args and env.args[1]
+    if scriptPath then
+        scriptArgs = env.args
+        runScript(scriptPath, env.getenv)
+        return
+    end
+
+    tty:clear()
+    polaris.analytics.addEvent("console")
+    sourceFile("/etc/.kshrc", env.getenv)
 
     while true do
         -- To fix cursor bug I do \r lol, as I am to busy to fix it normally

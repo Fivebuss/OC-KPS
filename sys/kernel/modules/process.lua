@@ -6,7 +6,7 @@ Plus it is helpful for signal stuff and when I add children and more signal stuf
 
 Anyway it is a manager for scheduler + fd 0,1,2 
 As such it copies alot and imports scheduler.
-So userspace doesnt need to care about my aweful code :)
+So userspace doesnt need to care about my aweful scheduler internals :)
 
 Child parent rules are freaky. Okay so:
 Inherit groups
@@ -20,8 +20,8 @@ Process groups are just custom because linux is weird so we wont use theirs
   process.GROUP = {
     SYS     = 1, -- kernel lives here, you cannot touch it. Normally
     MISM    = 2, -- "mismanaged" yeah this is helpful for me, see below
-    SYSRESV = {3,4,5}, -- system reserved reserved, only spawn's opts.reserved enters them
     SVC     = 3, -- privileged services, see services.lua
+    SYSRESV = {4,5}, -- system reserved, only spawn's opts.reserved enters them
     USER    = 6, -- default group for anything unless it specifies one
     USERFG  = 7,
     USERBG  = 8,

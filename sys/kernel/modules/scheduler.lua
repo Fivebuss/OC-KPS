@@ -704,7 +704,7 @@ local function tick(...)
                     if args then
                         ok, a, b, c = coroutine_resume(
                             t.co,
-                            table.unpack(args, 1, args.n)
+                            unpack(args, 1, args.n)
                         )
                     else
                         ok, a, b, c = coroutine_resume(t.co, v)
