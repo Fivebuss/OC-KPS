@@ -79,6 +79,13 @@ process.SIG = {
     CONT  = "CONT",
     HUP   = "HUP",
     CHLD  = "CHLD", -- Yes I know not a handler bite me 
+
+    [1]  = "HUP",
+    [2]  = "INT",
+    [9]  = "KILL",
+    [17] = "CHLD",
+    [18] = "CONT",
+    [20] = "TSTP",
 }
 
 -- omg process groups

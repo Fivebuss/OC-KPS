@@ -8,10 +8,28 @@ local function prepareHalt(signal, keepUid)
     polaris.services.halt()
 
     local selfUid = polaris.scheduler.activeThread()
-    -- Still alive? Nah
-    polaris.scheduler.killAll(keepUid or selfUid)
-    polaris.scheduler.cleanup(event)
-    polaris.scheduler.deinit(event, polaris.scheduler.handler)
+    local kernelUid = polaris.scheduler.kernelProcess
+    local keep = keepUid or selfUid
+
+    -- Send out INT
+    local scheduler = polaris.scheduler
+    for _, info in ipairs(scheduler.list()) do
+        local uid = info.uid
+        if uid ~= kernelUid and uid ~= keep then
+            scheduler.signal(uid, scheduler.SIG.INT)
+        end
+    end
+
+    -- Il be nice, you can have some time to shutdown
+    local deadline = computer.uptime() + 2
+    while computer.uptime() < deadline and scheduler.threadCount() > 2 do
+        -- threadCount > 2: kernel + caller still alive, wait for the rest
+        coroutine.yield()
+    end
+    -- Not all the time though
+    scheduler.killAll(keep)
+    scheduler.cleanup(event)
+    scheduler.deinit(event, scheduler.handler)
 end
 
 local function call(syscall, ...)

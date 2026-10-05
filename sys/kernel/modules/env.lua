@@ -5,12 +5,20 @@ Each process gets their own _ENV! yay
 e.load(chunk, chunkname, mode, givenEnv): Load but it hopefully cant fail
 e.error(msg) / e.assert(v, msg, ...): Returns error, yeah it just xpcalls
 
-env.new(base):         copies environment
+env.new(base):              inherits from base via __index, does NOT copy globals
 env.forProcess(pid, parentEnv):   gets existing, or makes one (inheriting parentEnv, else fresh _G copy)
-env.get(pid):          see above
-env.set(pid, e):       modifies a pid's _ENV
-env.destroy(pid):      gets rid of a env thing
-env.current():         the current one when used inside a process
+env.get(pid):               see above
+env.set(pid, e):            modifies a pid's _ENV
+env.destroy(pid):           gets rid of a env thing
+env.current():              the current one when used inside a process
+
+-- Memory note:
+-- Previously env.new() did a full pairs() copy of _G into every new env table,
+-- meaning every spawned process paid sizeof(_G) in table entries up front.
+-- Now child envs inherit globals through __index and only store keys they
+-- actually write, so a freshly spawned process costs nearly nothing.
+-- package and package.loaded are shared references (same as before, intentional).
+-- env vars (PATH, PWD etc) are still deep-copied so children get their own copy.
 
 --]]
 
@@ -27,8 +35,9 @@ end
 local realLoad = load
 
 -- Modifies load, error and assert
-local function installOverrides(e)
+local function installOverrides(e, base)
     -- Environment variable stuff
+    -- inherit parent env vars as starting point, then give child its own copy
     e.env = e.env or {}
 
     e.getenv = function(key)
@@ -48,7 +57,6 @@ local function installOverrides(e)
         end
         return result
     end
-
 
     e.error = function(msg, level)
         error(msg, (level or 1) + 1)
@@ -74,21 +82,21 @@ function env.new(base)
     base = base or _G
 
     local e = {}
-    for k, v in pairs(base) do
-        if k == "env" and type(v) == "table" then
-            e.env = {}
-            for k2, v2 in pairs(v) do
-                e.env[k2] = v2
-            end
-        else
-            e[k] = v
+
+    setmetatable(e, { __index = base, __newindex = rawset })
+
+    -- __index trick to save ram
+    e.env = {}
+    if base.env and type(base.env) == "table" then
+        for k, v in pairs(base.env) do
+            e.env[k] = v
         end
     end
 
     e._G = e
     e._ENV = e
 
-    installOverrides(e)
+    installOverrides(e, base)
 
     return e
 end

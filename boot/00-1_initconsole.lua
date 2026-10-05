@@ -1,7 +1,7 @@
 -- Starts init console if present and configures polaris.config
-local package = require("package")
 
 if polaris.config["initConsole"] == true then
+    local package = require("package")
     if package.loaded["tty"] ~= nil then
         computer.beep(1000)
         dofile("/boot/util/initconsole.lua")

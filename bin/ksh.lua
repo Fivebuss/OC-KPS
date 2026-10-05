@@ -1353,6 +1353,134 @@ builtins["printf"] = function(args, stdin, stdout, stderr)
     lastExitCode = 0
 end
 
+builtins["kill"] = function(args, stdin, stdout, stderr)
+    local sig = "INT" -- default
+    local sigNum = 2
+    local targets = {}
+    local i = 1
+
+    -- -l
+    if args[1] == "-l" then
+        local nums = {}
+
+        for n, name in pairs(process.SIG) do
+            if type(n) == "number" and type(name) == "string" then
+                nums[#nums + 1] = n
+            end
+        end
+
+        table.sort(nums)
+
+        for _, n in ipairs(nums) do
+            stdout:write(n .. ") SIG" .. process.SIG[n] .. "\n")
+        end
+
+        lastExitCode = 0
+        return
+    end
+
+    while i <= #args do
+        local a = args[i]
+
+        if a == "-s" then
+            i = i + 1
+            local tok = args[i]
+
+            if not tok then
+                stderr:write("kill: -s requires a signal name\n")
+                lastExitCode = 1
+                return
+            end
+
+            local n = tonumber(tok) or process.SIG[tok:upper()]
+
+            if type(n) ~= "number" then
+                stderr:write("kill: unknown signal: " .. tok .. "\n")
+                lastExitCode = 1
+                return
+            end
+
+            if not process.SIG[n] then
+                stderr:write("kill: unknown signal: " .. tok .. "\n")
+                lastExitCode = 1
+                return
+            end
+
+            sigNum = n
+            sig = process.SIG[n]
+        elseif a == "-n" then
+            i = i + 1
+            local tok = args[i]
+            local n = tok and tonumber(tok)
+
+            if not n or not process.SIG[n] then
+                stderr:write("kill: -n requires a valid signal number\n")
+                lastExitCode = 1
+                return
+            end
+
+            sigNum = n
+            sig = process.SIG[n]
+        elseif a:sub(1, 1) == "-" and #a > 1 then
+            -- -SIGNAME or -NUM
+            local tok = a:sub(2)
+            local n = tonumber(tok) or process.SIG[tok:upper()]
+
+            if type(n) ~= "number" then
+                stderr:write("kill: unknown signal: " .. tok .. "\n")
+                lastExitCode = 1
+                return
+            end
+
+            if not process.SIG[n] then
+                stderr:write("kill: unknown signal: " .. tok .. "\n")
+                lastExitCode = 1
+                return
+            end
+
+            sigNum = n
+            sig = process.SIG[n]
+        elseif a:sub(1, 1) == "%" then
+            -- jobs for when I get around to it
+            stderr:write("kill: Jobs not implemented\n")
+            lastExitCode = 1
+            return
+        else
+            targets[#targets + 1] = a
+        end
+
+        i = i + 1
+    end
+
+    if #targets == 0 then
+        stderr:write("kill: usage: kill [-s sig|-n num|-SIG] pid ...\n")
+        lastExitCode = 1
+        return
+    end
+
+    local ok = true
+
+    for _, t in ipairs(targets) do
+        local pid = tonumber(t)
+
+        if not pid then
+            stderr:write("kill: invalid pid: " .. t .. "\n")
+            ok = false
+        elseif not process.exists(pid) then
+            stderr:write("kill: no such process: " .. t .. "\n")
+            ok = false
+        else
+            local sent = process.signal(pid, process.SIG[sig])
+            if not sent then
+                stderr:write("kill: operation not permitted for pid: " .. t .. "\n")
+                ok = false
+            end
+        end
+    end
+
+    lastExitCode = ok and 0 or 1
+end
+
 -- The input
 
 -- Mmmm lists, returns them
@@ -1700,22 +1828,25 @@ shellPid = process.spawn(shellLoop, {
     label = "ksh",
     pgid = process.GROUP.USER,
     onExit = function(success, reason)
-        computer.beep(2000)
-        computer.beep(2000)
-        --polaris.debug.print(tostring(success) .. " " .. tostring(reason))
-        if tty.attach then
-            tty:setCursor(false)
-            tty:clear()
-            tty:detach(shellPid)
-            tty:close()
+        if polaris.config["debug"] == true then
+            computer.beep(2000)
+            computer.beep(2000)
+            polaris.debug.print(tostring(success) .. " " .. tostring(reason))
+        else
+            if tty.attach then
+                tty:setCursor(false)
+                tty:clear()
+                tty:detach(shellPid)
+                tty:close()
+            end
+            process.destroy(shellPid)
         end
-        process.destroy(shellPid)
     end,
     -- Yay handlers
     handlers = {
-        INT = function(uid, sig)
-            drawPrompt()
-        end,
+        -- INT = function(uid, sig)
+        --     drawPrompt()
+        -- end,
         HUP = function(uid, sig)
             drawPrompt()
         end,
