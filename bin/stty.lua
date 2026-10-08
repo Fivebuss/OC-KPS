@@ -1,5 +1,6 @@
 -- /bin/stty.lua
--- No console driver yet but its fine
+-- No console driver yet but its fine. 
+-- Hang on, whats that? A week later there is one? And its compatible now? Miracle, I dont even need to touch this or tty module
 -- Worlds worse elseif spam. AI made this, I am not clinically insane
 
 local args = { ... }

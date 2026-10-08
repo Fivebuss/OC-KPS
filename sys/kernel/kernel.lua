@@ -55,6 +55,6 @@ local function onExit(success, reason)
     end
 end
 
-scheduler.kernelProcess = scheduler.spawn(kernelProcess, onExit, "idle")
+scheduler.kernelProcess = scheduler.spawn(kernelProcess, onExit, "polaris")
 
 return scheduler.kernelProcess

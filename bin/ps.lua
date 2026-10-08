@@ -59,6 +59,11 @@ local function fmtIo(pid, human)
     return table.concat(labels, human and " " or ",")
 end
 
+local function fmtCtty(e)
+    if not e.ctty then return "-" end
+    return e.ctty:match("(%x%x%x%x)$") or e.ctty:sub(-4)
+end
+
 local all = false
 local human = false
 local showIo = false
@@ -112,7 +117,7 @@ local header, rowFn
 
 if all then
     if human then
-        header = { "LABEL", "PID", "PPID", "AGE", "SPAWNED", "S", "GROUP" }
+        header = { "LABEL", "PID", "PPID", "AGE", "SPAWNED", "S", "GROUP", "TTY" }
         if showIo then header[#header + 1] = "IO" end
         rowFn = function(e)
             local row = {
@@ -123,12 +128,13 @@ if all then
                 fmtSeconds(e.spawnedAt, true),
                 statusChar(e),
                 groupName(e.pgid),
+                fmtCtty(e),
             }
             if showIo then row[#row + 1] = fmtIo(e.pid, true) end
             return row
         end
     else
-        header = { "CMD", "PID", "PPID", "LABEL", "AGE", "SPAWNED", "S", "GID" }
+        header = { "CMD", "PID", "PPID", "LABEL", "AGE", "SPAWNED", "S", "GID", "TTY" }
         if showIo then header[#header + 1] = "IO" end
         rowFn = function(e)
             local row = {
@@ -140,6 +146,7 @@ if all then
                 fmtSeconds(e.spawnedAt, false),
                 statusChar(e),
                 tostring(e.pgid or "-"),
+                fmtCtty(e),
             }
             if showIo then row[#row + 1] = fmtIo(e.pid, false) end
             return row
@@ -147,7 +154,7 @@ if all then
     end
 else
     if human then
-        header = { "LABEL", "PID", "PPID", "AGE", "S" }
+        header = { "LABEL", "PID", "PPID", "AGE", "S", "TTY" }
         if showIo then header[#header + 1] = "IO" end
         rowFn = function(e)
             local row = {
@@ -156,12 +163,13 @@ else
                 tostring(e.ppid or "-"),
                 fmtSeconds(e.age, true),
                 statusChar(e),
+                fmtCtty(e),
             }
             if showIo then row[#row + 1] = fmtIo(e.pid, true) end
             return row
         end
     else
-        header = { "CMD", "PID", "PPID", "LABEL", "AGE", "S" }
+        header = { "CMD", "PID", "PPID", "LABEL", "AGE", "S", "TTY" }
         if showIo then header[#header + 1] = "IO" end
         rowFn = function(e)
             local row = {
@@ -171,6 +179,7 @@ else
                 e.label or "-",
                 fmtSeconds(e.age, false),
                 statusChar(e),
+                fmtCtty(e),
             }
             if showIo then row[#row + 1] = fmtIo(e.pid, false) end
             return row

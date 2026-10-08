@@ -324,6 +324,7 @@ function process.get(pid)
         spawnedAt = info.spawnedAt,
         age = info.age,
         protected = isKernelPid(pid),
+        ctty = own.ctty,
     }
 end
 
@@ -715,6 +716,21 @@ end
 
 function process.writeError(...)
     return process.error():write(...)
+end
+
+-- Just a table entry for what tty is being used
+function process.setCtty(pid, gpu_addr)
+    local entry = table_[pid]
+    if not entry then return false end
+    entry.ctty = gpu_addr
+    return true
+end
+
+function process.clearCtty(pid)
+    local entry = table_[pid]
+    if not entry then return false end
+    entry.ctty = nil
+    return true
 end
 
 -- fd tables

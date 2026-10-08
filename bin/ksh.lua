@@ -14,13 +14,17 @@ local function writeRed(stream, ...)
     return stream:write("\27[0m")
 end
 
-local tty = polaris.tty.new(polaris.gpu)
+local tty = polaris.console.openTTY({
+    gpu   = polaris.console._spawnGpu,
+    owner = process.self(),
+})
+
 tty:setCursorShape("underline")
 
 -- For later
 tty.disabled.Z = true
 
-polaris.config["tty.profile"] = 7
+--polaris.config["tty.profile"] = 7
 
 -- Pipeline stuff
 local function ttyOutPassthrough()
@@ -640,9 +644,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
 
                 process.create(pid, stdin, stdout, stderr)
                 pids[#pids + 1] = pid
-                if tty.attach then
-                    tty:attach(pid)
-                end
+                tty:attach(pid)
             end
         end
     end
@@ -1832,6 +1834,11 @@ shellPid = process.spawn(shellLoop, {
             computer.beep(2000)
             computer.beep(2000)
             polaris.debug.print(tostring(success) .. " " .. tostring(reason))
+
+            tty:setCursor(false)
+            tty:clear()
+            tty:detach(shellPid)
+            tty:close()
         else
             if tty.attach then
                 tty:setCursor(false)

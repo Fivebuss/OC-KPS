@@ -73,16 +73,20 @@ local color_profiles = {
 
 local len = unicode.len
 local usub = unicode.sub
+local mmax, mmin = math.max, math.min
+local sfind, ssub, slen = string.find, string.sub, string.len
+local tconcat = table.concat
 
 local function brailleChar(a, b, c, d, e, f, g, h)
     return unicode.char(10240 + 128 * h + 64 * g + 32 * f + 16 * d + 8 * b + 4 * e + 2 * c + a)
 end
 
 -- Snatched my glyph renderer trick
+local _brailleGlyph = brailleChar(1, 1, 1, 1, 1, 1, 1, 1)
 local cursorShapes = {
     invert = function() return nil end,
     block = function() return "█" end,
-    braille = function() return brailleChar(1, 1, 1, 1, 1, 1, 1, 1) end,
+    braille = function() return _brailleGlyph end,
     underline = function() return "▁" end,
     bar = function() return "▏" end,
 }
@@ -194,7 +198,7 @@ function tty.new(gpu)
 
     local function wrap_cursor(t)
         while t.cx > t.w do
-            t.cx, t.cy = math.max(1, t.cx - t.w), t.cy + 1
+            t.cx, t.cy = mmax(1, t.cx - t.w), t.cy + 1
         end
         while t.cx < 1 do
             t.cx, t.cy = t.w + t.cx, t.cy - 1
@@ -238,11 +242,10 @@ function tty.new(gpu)
     local function rawwrite(t, lines)
         if t.attributes.xoff then return end
         while #lines > 0 do
-            local next_nl = lines:find("\n")
+            local next_nl = sfind(lines, "\n", 1, true)
             if next_nl then
-                local ln
-                lines, ln = pop(lines, next_nl - 1, true)
-                lines = lines:sub(2)
+                local ln = ssub(lines, 1, next_nl - 1)
+                lines = ssub(lines, next_nl + 1)
                 local wrapped = writeline(t, ln)
                 if not wrapped then
                     t.cx, t.cy = 1, t.cy + 1
@@ -262,19 +265,19 @@ function tty.new(gpu)
 
     -- Wrap cursor
     function commands.A(t, args)
-        t.cy = t.cy - math.max(args[1] or 0, 1); wrap_cursor(t)
+        t.cy = t.cy - mmax(args[1] or 0, 1); wrap_cursor(t)
     end
 
     function commands.B(t, args)
-        t.cy = t.cy + math.max(args[1] or 0, 1); wrap_cursor(t)
+        t.cy = t.cy + mmax(args[1] or 0, 1); wrap_cursor(t)
     end
 
     function commands.C(t, args)
-        t.cx = t.cx + math.max(args[1] or 0, 1); wrap_cursor(t)
+        t.cx = t.cx + mmax(args[1] or 0, 1); wrap_cursor(t)
     end
 
     function commands.D(t, args)
-        t.cx = t.cx - math.max(args[1] or 0, 1); wrap_cursor(t)
+        t.cx = t.cx - mmax(args[1] or 0, 1); wrap_cursor(t)
     end
 
     function commands.g(t, args)
@@ -282,8 +285,8 @@ function tty.new(gpu)
         local cmd = table.remove(args, 1)
         if cmd == 0 then
             if #args < 4 then return end
-            args[1] = math.max(1, math.min(args[1], t.w))
-            args[2] = math.max(1, math.min(args[2], t.h))
+            args[1] = mmax(1, mmin(args[1], t.w))
+            args[2] = mmax(1, mmin(args[2], t.h))
             t.gpu.fill(args[1], args[2], args[3], args[4], " ")
         elseif cmd == 1 then
             if #args < 6 then return end
@@ -293,13 +296,13 @@ function tty.new(gpu)
     end
 
     function commands.G(t, args)
-        t.cx = math.max(1, math.min(t.w, args[1] or 1))
+        t.cx = mmax(1, mmin(t.w, args[1] or 1))
     end
 
     function commands.H(t, args)
         local y, x = args[1] or 1, args[2] or 1
-        t.cx = math.max(1, math.min(t.w, x))
-        t.cy = math.max(1, math.min(t.h, y))
+        t.cx = mmax(1, mmin(t.w, x))
+        t.cy = mmax(1, mmin(t.h, y))
         wrap_cursor(t)
     end
 
@@ -486,15 +489,13 @@ function tty.new(gpu)
         local savedFgp = pf ~= nil
         local savedBgp = pb ~= nil
 
-        t.cursorSaved = {
-            x = cur.x,
-            y = cur.y,
-            char = c,
-            fg = savedFg,
-            bg = savedBg,
-            fgp = savedFgp,
-            bgp = savedBgp
-        }
+        local saved = t.cursorSaved
+        if saved then
+            saved.x, saved.y, saved.char = cur.x, cur.y, c
+            saved.fg, saved.bg, saved.fgp, saved.bgp = savedFg, savedBg, savedFgp, savedBgp
+        else
+            t.cursorSaved = { x=cur.x, y=cur.y, char=c, fg=savedFg, bg=savedBg, fgp=savedFgp, bgp=savedBgp }
+        end
 
         if glyph then
             t.gpu.setForeground(t.fg, t.fgp)
@@ -552,7 +553,11 @@ function tty.new(gpu)
             eraseCursor(self)
         end
 
-        str = str:gsub("\t", "  ")
+        str = str:gsub("[\t\a\r]", function(c)
+            if c == "\t" then return "  "
+            --elseif c == "\a" then computer.beep(); return ""  -- OC devs why must you make beep yield internally :(
+            else return "\27[G" end
+        end)
 
         while #str > 0 do
             if self.in_esc then
@@ -583,13 +588,7 @@ function tty.new(gpu)
                     syncCursor(self)
                 end
             else
-                if str:find("\a") then
-                    computer.beep()
-                end
-                str = str:gsub("\a", "")
-                str = str:gsub("\r", "\27[G")
-
-                local next_esc = str:find("\27")
+                local next_esc = sfind(str, "\27", 1, true)
                 if next_esc then
                     self.in_esc = true
                     self.esc = ""
@@ -621,16 +620,17 @@ function tty.new(gpu)
 
     -- nottylinebuffer supported but usually line buffers
     function self:write(...)
-        local str = table.concat({ ... })
+        local str = tconcat({ ... })
         if #str == 0 then return true end
 
         if self.attributes.line and not cfg("nottylinebuffer") then
             self.wb = self.wb .. str
-            if self.wb:find("\n") then
-                local ln = self.wb:match(".+\n") or self.wb:match(".-\n")
-                self.wb = self.wb:sub(#ln + 1)
+            local nl = sfind(self.wb, "\n", 1, true)
+            if nl then
+                local ln = ssub(self.wb, 1, nl)
+                self.wb = ssub(self.wb, nl + 1)
                 return self:write_str(ln)
-            elseif len(self.wb) > 2048 then
+            elseif #self.wb > 2048 then
                 local ln = self.wb
                 self.wb = ""
                 return self:write_str(ln)
@@ -769,8 +769,8 @@ function tty.new(gpu)
 
         if len(outChar) == 1 and ch == 0 then
             outChar, tw = "", ""
-        elseif outChar:match("\27%[[ABCD]") then
-            tw = string.format("^[%s", outChar:sub(-1))
+        elseif aliases[code] then
+            tw = "^[" .. ssub(outChar, -1)
         elseif #outChar == 1 and ch < 32 then
             local tch = string.char(
                 (ch == 0 and 32) or
@@ -845,8 +845,21 @@ function tty.new(gpu)
     end
 
     function self:clipboard(text)
-        for c in text:gmatch(".") do
-            self:onKeyDown(c:byte(), 0)
+        if self.suspended or self.attributes.xoff then return end
+        if not self.attributes.raw then
+            text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+        end
+        if self.attributes.echo and not self.attributes.xoff then
+            self:write_str(text, true)
+        end
+        if not self.attributes.xoff then
+            self.rb = self.rb .. text
+            local nl = sfind(self.rb, "\n", 1, true)
+            if nl then
+                local line = ssub(self.rb, 1, nl)
+                self.rb = ssub(self.rb, nl + 1)
+                self.writer:write(line)
+            end
         end
     end
 
@@ -856,19 +869,18 @@ function tty.new(gpu)
         n = n or math.huge
         self:flush()
 
-        while (not self.rb:find("\n")) and len(self.rb) < n and not self.rb:find("\4") do
+        while (not sfind(self.rb, "\n", 1, true)) and len(self.rb) < n and not sfind(self.rb, "\4", 1, true) do
             coroutine.yield()
         end
 
-        if self.rb:find("\4") then
-            local eof_pos = self.rb:find("\4")
+        local eof_pos = sfind(self.rb, "\4", 1, true)
+        if eof_pos then
             local data = usub(self.rb, 1, eof_pos - 1)
             self.rb = ""
-            -- Return buffered content or nil
             return #data > 0 and data or nil
         end
 
-        local take = math.min(n, len(self.rb))
+        local take = mmin(n, len(self.rb))
         local data = usub(self.rb, 1, take)
         self.rb = usub(self.rb, take + 1)
         return data
@@ -876,16 +888,16 @@ function tty.new(gpu)
 
     function self:readLine()
         self:flush()
-        while not self.rb:find("\n") and not self.rb:find("\4") do
+        while not sfind(self.rb, "\n", 1, true) and not sfind(self.rb, "\4", 1, true) do
             coroutine.yield()
         end
-        if self.rb:find("\4") then
+        if sfind(self.rb, "\4", 1, true) then
             self.rb = ""
             return nil
         end
-        local nl = self.rb:find("\n")
-        local line = self.rb:sub(1, nl - 1)
-        self.rb = self.rb:sub(nl + 1)
+        local nl = sfind(self.rb, "\n", 1, true)
+        local line = ssub(self.rb, 1, nl - 1)
+        self.rb = ssub(self.rb, nl + 1)
         return line
     end
 
