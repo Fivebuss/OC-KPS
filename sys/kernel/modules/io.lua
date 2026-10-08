@@ -306,7 +306,7 @@ io.newStream = newStream
 
 local pipeMt = { __index = {} }
 
--- scheduler: the scheduler module (needed to yield/resume the caller)
+-- AI did this V
 -- capacity: soft max buffered bytes before write() blocks the writer (optional, nil = unbounded)
 -- Large things cause next write to be pressured!
 local function newPipe(scheduler, capacity)
@@ -326,11 +326,6 @@ local function newPipe(scheduler, capacity)
 end
 
 io.newPipe = newPipe
-
--- O(1) in theory
-local function pipeBufLen(self)
-    return self._size
-end
 
 local function pipeWake(self, uidField)
     local uid = self[uidField]
