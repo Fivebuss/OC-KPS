@@ -1483,6 +1483,92 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
     lastExitCode = ok and 0 or 1
 end
 
+builtins["read"] = function(args, stdin, stdout, stderr)
+    local raw = false
+    local silent = false
+    local varNames = {}
+
+    local i = 1
+    while i <= #args do
+        local a = args[i]
+        if a == "-r" then
+            raw = true
+        elseif a == "-s" then
+            silent = true
+        elseif a == "-rs" or a == "-sr" then
+            raw = true
+            silent = true
+        elseif a:sub(1, 1) == "-" then
+            stderr:write("ksh: read: " .. a .. ": invalid option\n")
+            lastExitCode = 1
+            return
+        else
+            varNames[#varNames + 1] = a
+        end
+        i = i + 1
+    end
+
+    if #varNames == 0 then
+        varNames[1] = "REPLY"
+    end
+
+    -- -s
+    local prevEcho
+    if silent and tty then
+        prevEcho = tty.attributes.echo
+        tty.attributes.echo = false
+    end
+
+    local line = stdin:readLine()
+    if line == nil then
+        lastExitCode = 1
+        return
+    end
+    line = line:gsub("\n$", "")
+
+    if silent and tty then
+        tty.attributes.echo = prevEcho
+        --tty:write("\n")
+        tty:flush()
+    end
+
+    -- EOF
+    if line == nil then
+        lastExitCode = 1
+        return
+    end
+
+    -- -r
+    if not raw then
+        line = line:gsub("\\\n", "")
+        line = line:gsub("\\(.)", "%1")
+    end
+
+    local env = polaris.env.current()
+
+    if #varNames == 1 then
+        locals[varNames[1]] = line
+        env.setenv(varNames[1], line)
+    else
+        local parts = {}
+        for word in line:gmatch("%S+") do
+            parts[#parts + 1] = word
+        end
+        for idx, name in ipairs(varNames) do
+            if idx < #varNames then
+                locals[name] = parts[idx] or ""
+                env.setenv(name, parts[idx] or "")
+            else
+                local rest = table.concat(parts, " ", idx)
+                locals[name] = rest
+                env.setenv(name, rest)
+            end
+        end
+    end
+
+    lastExitCode = 0
+end
+
 -- The input
 
 -- Mmmm lists, returns them

@@ -109,7 +109,7 @@ local sigacts = {
     D = true,       -- ^D eof
     C = "INT",      -- ^C int
     Z = "TSTP",     -- ^Z
-    ["/"] = "KILL", -- ^\ quit
+    ["\\"] = "KILL", -- ^\ quit
 }
 
 -- Uses polaris.config instead
@@ -260,8 +260,8 @@ function tty.new(gpu)
 
     -- Same for ansi stuff
 
-    local commands, control = {}, {}
-    local separators = { standard = "[", control = "?" }
+    local commands, control, dec = {}, {}, {}
+    local separators = { standard = "[", control = "?", dec = "[?" }
 
     -- Wrap cursor
     function commands.A(t, args)
@@ -278,6 +278,25 @@ function tty.new(gpu)
 
     function commands.D(t, args)
         t.cx = t.cx - mmax(args[1] or 0, 1); wrap_cursor(t)
+    end
+
+    -- Cursor next line
+    function commands.E(t, args)
+        t.cy = t.cy + mmax(args[1] or 0, 1)
+        t.cx = 1
+        wrap_cursor(t)
+    end
+
+    -- Cursor prev line
+    function commands.F(t, args)
+        t.cy = t.cy - mmax(args[1] or 0, 1)
+        t.cx = 1
+        wrap_cursor(t)
+    end
+
+    -- Cursor position thing
+    function commands.f(t, args)
+        commands.H(t, args)
     end
 
     function commands.g(t, args)
@@ -572,14 +591,22 @@ function tty.new(gpu)
                     local esc = self.esc .. finish
                     self.esc = ""
 
-                    local separator, raw_args, code = esc:match("\27([%[%?])([%-%d;]*)([a-zA-Z])")
+                    -- ESC[?
+                    local separator, raw_args, code =
+                        esc:match("\27(%[%?)([%d;]*)([a-zA-Z])")
+                    if not separator then
+                        separator, raw_args, code =
+                            esc:match("\27([%[%?])([%-%d;]*)([a-zA-Z])")
+                    end
                     raw_args = raw_args or "0"
                     local args = {}
                     for arg in raw_args:gmatch("([^;]+)") do
                         args[#args + 1] = tonumber(arg) or 0
                     end
 
-                    if separator == separators.standard and commands[code] then
+                    if separator == separators.dec and dec[code] then
+                        dec[code](self, args)
+                    elseif separator == separators.standard and commands[code] then
                         commands[code](self, args)
                     elseif separator == separators.control and control[code] then
                         control[code](self, args)

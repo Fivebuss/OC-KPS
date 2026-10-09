@@ -1,5 +1,5 @@
 local computer = require("computer")
-local condraw = require("condraw")
+local condraw = require("ksh.condraw")
 
 local version = getenv("VERSION")
 

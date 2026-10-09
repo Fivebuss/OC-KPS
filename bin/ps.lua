@@ -1,7 +1,7 @@
 -- /bin/ps.lua
 -- Shares same name but this is not linux at all lol
 
-local getopt = require("getopt")
+local getopt = require("ksh.getopt")
 local process = polaris.process
 
 -- -ah readable name

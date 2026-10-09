@@ -2,7 +2,7 @@
 -- This got big quickly
 
 local filesystem = require("filesystem")
-local getopt = require("getopt")
+local getopt = require("ksh.getopt")
 
 local showAll = false
 local listDirSelf = false

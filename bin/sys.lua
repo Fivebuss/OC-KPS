@@ -7,7 +7,7 @@
 -- sys -e     current environment
 -- sys -b     boot time stuff
 
-local getopt = require("getopt")
+local getopt = require("ksh.getopt")
 
 local want, verbose = {}, false
 local longSpec = { syscalls = "c", env = "e", boot = "b", verbose = "v" }

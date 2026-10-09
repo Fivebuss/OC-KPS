@@ -1,6 +1,6 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
-package.path = "/lib/?.lua;/usr/lib/?.lua;/home/lib/?.lua;./?.lua;/lib/?/init.lua;/usr/lib/?/init.lua;/home/lib/?/init.lua;./?/init.lua;/sys/kernel/modules/?.lua"
+package.path = "/lib/?.lua;/lib/?/init.lua;/lib/?/?.lua;/usr/lib/?.lua;/usr/lib/?/init.lua;/usr/lib/?/?.lua;/home/lib/?.lua;/home/lib/?/init.lua;/home/lib/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;/sys/kernel/modules/?.lua"
 
 local event_internals = require("event_internals")
 local component = require("component")

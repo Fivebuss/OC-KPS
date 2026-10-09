@@ -16,9 +16,9 @@ local function chunkRead(reader)
         io.flush()
 
         count = count + 1
-        if count % 16 == 0 then
+        if count % 4 == 0 then
             local sig = coroutine.yield()
-            if sig then break end
+            if sig and process.isSignal(sig) then break end
         end
 
         chunk = reader:read(chunkSize)

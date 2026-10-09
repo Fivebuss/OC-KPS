@@ -1,7 +1,7 @@
 -- OC components port
 local component = require("component")
 local text = require("text")
-local getopt = require("getopt")
+local getopt = require("ksh.getopt")
 
 
 local args = { ... }

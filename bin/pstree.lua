@@ -2,7 +2,7 @@
 -- Oooo fancy
 -- half of this isnt my work and was given to me
 
-local getopt = require("getopt")
+local getopt = require("ksh.getopt")
 local process = polaris.process
 
 local GROUP_NAMES = {}

@@ -5,6 +5,8 @@ _G.polaris.console = assert(
     "Console driver failed to initialize!"
 )
 
+polaris.config["tty.profile"] = 1
+
 if polaris.config["initConsole"] ~= true then
     if package.loaded["tty"] ~= nil then
         for gpu_addr in polaris.console.gpus() do
