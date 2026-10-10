@@ -775,7 +775,7 @@ function tty.new(gpu)
     end
 
     local aliases = {
-        [200] = "\27[A", [208] = "\27[B", [205] = "\27[C", [203] = "\27[D",
+        [200] = "\27[A", [208] = "\27[B", [205] = "\27[C", [203] = "\27[D", [211] = "\27[3~",
     }
 
     -- Key handling is goofy with this event library. May change
