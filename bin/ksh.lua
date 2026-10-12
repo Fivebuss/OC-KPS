@@ -63,10 +63,12 @@ local function drawPrompt()
 end
 
 -- Deal with signals
+local signalPrompt = false
 tty.onSignal = function(_, sig)
     process.signalGroup(process.GROUP.USERFG, sig)
     if not fgBusy then
         drawPrompt()
+        signalPrompt = true
     end
 end
 
@@ -1881,12 +1883,13 @@ local function utf8_chars(s)
 end
 
 -- Mmmm ring buffers how I like you
-local history = { entries = {}, maxLen = 16 }
+local maxHisLen = polaris.config["ksh_history_length"] or 16
+local history = { entries = {}, maxLen = maxHisLen }
 local eofCount = 0
 
 local function historyMaxLen()
-    local v = polaris and polaris.config and polaris.config["ksh.history.len"]
-    return (type(v) == "number" and v > 0) and math.floor(v) or 16
+    local v = polaris and polaris.config and polaris.config["ksh_history_length"]
+    return (type(v) == "number" and v > 0) and math.floor(v) or maxHisLen
 end
 
 local function historyPush(line)
@@ -1954,7 +1957,11 @@ local function readline()
     local savedClipboard = tty.clipboard
 
     tty.rb = ""
-    drawPrompt()
+    if signalPrompt then
+        signalPrompt = false
+    else
+        drawPrompt()
+    end
 
     local resultLine = nil
     local done = false
@@ -2095,6 +2102,8 @@ local function readline()
             pos = 0
             hIdx = nil
             liveBuf = {}
+            resultLine = ""
+            done = true
             return
         end
 

@@ -6,6 +6,7 @@ _G.polaris.console = assert(
 )
 
 polaris.config["tty.profile"] = 1
+polaris.config["ksh_history_length"] = 32
 
 if polaris.config["initConsole"] ~= true then
     if package.loaded["tty"] ~= nil then

@@ -441,7 +441,7 @@ function pipeMt.__index:read(count)
         self._readerUid = self._scheduler.activeThread()
         local v = self._scheduler.waitForInput()
         if self._scheduler.isSignal(v) then
-            return nil, v 
+            return nil, v
         end
     end
 end
@@ -652,8 +652,15 @@ local function describeStream(desc)
         kind = "stream"
     elseif mt == fsStreamMt then
         kind = "file"
-    elseif s and type(s.write) == "function" then
-        kind = "custom" -- outWriter(), ttys, etc
+    elseif s then
+        local t = type(s)
+        if t == "table" or t == "userdata" then
+            if type(s.write) == "function" then
+                kind = "custom" -- outWriter(), ttys, etc
+            end
+        elseif t == "function" then
+            kind = "custom"
+        end
     end
 
     local info = { present = true, kind = kind }

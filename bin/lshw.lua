@@ -1,3 +1,4 @@
+-- /bin/lshw.lua
 -- OC components port
 local component = require("component")
 local text = require("text")

@@ -206,29 +206,23 @@ end
 
 function api.getDevice(path)
     checkArg(1, path, "string")
-    local device
-    local reason = "no such device"
-    local real, why = fs.realPath(require("shell").resolve(path))
+
+    local real, why = fs.realPath(path)
     if not real then return nil, why end
-    if fs.exists(real) then
-        -- we don't have a good way of knowing where dev is mounted still
-        -- similar hack in api.proxy.open
-        real = fs.path(real) .. (fs.name(real) or "")
-        local part, subbed = real:gsub("^/dev/", "")
-        if subbed > 0 and part:len() > 0 then
-            local node = findNode(part)
-            if node and node.proxy then
-                -- must be a special device node
-                device = node.proxy.device
-            end
-            if not device then
-                reason = "not a device"
-            end
-        else
-            device, reason = fs.get(real)
+
+    real = fs.path(real) .. (fs.name(real) or "")
+
+    local part, subbed = real:gsub("^/dev/", "")
+    if subbed > 0 and part:len() > 0 then
+        local node = findNode(part)
+        if node and node.proxy then
+            local device = node.proxy.device
+            if device then return device end
         end
+        return nil, "not a device"
     end
-    return device, reason
+
+    return fs.get(real)
 end
 
 function api.proxy.open(path, mode)

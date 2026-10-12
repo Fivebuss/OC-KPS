@@ -22,6 +22,7 @@ function os.exit(code)
         code = 0
     end
     process.exit(code)
+    return false
 end
 
 -- Does two things, destroys old managed _ENVs and it determines which one to copy

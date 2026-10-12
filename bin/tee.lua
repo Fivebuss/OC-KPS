@@ -46,21 +46,48 @@ end
 local function writeAll(chunk)
     io.write(chunk)
     io.flush()
+
     for _, h in ipairs(handles) do
         h:write(chunk)
     end
 end
 
-local chunkSize = 2048
-while true do
-    local chunk = io.stdin:read(chunkSize)
-    if not chunk then break end
-    if process.isSignal(chunk) then
-        if not ignoreInt then break end
-    else
-        writeAll(chunk)
+local function chunkRead()
+    while true do
+        local chunk = io.stdin:read(2048)
+        if not chunk then break end
+
+        if process.isSignal(chunk) then
+            if not ignoreInt then break end
+        else
+            writeAll(chunk)
+        end
+
+        coroutine.yield()
     end
-    coroutine.yield()
+end
+
+local function lineRead()
+    while true do
+        local line, _, noNewline = io.read("l")
+        if not line then break end
+
+        if process.isSignal(line) then
+            if not ignoreInt then break end
+        else
+            writeAll(noNewline and line or (line .. "\n"))
+        end
+
+        coroutine.yield()
+    end
+end
+
+local stdinInfo = require("io").describeStream(io.stdin)
+
+if stdinInfo.kind == "pipe" then
+    chunkRead()
+else
+    lineRead()
 end
 
 for _, h in ipairs(handles) do

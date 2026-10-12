@@ -310,6 +310,7 @@ end
 filesystem.findNode = findNode
 filesystem.segments = segments
 filesystem.fstab = fstab
+filesystem.mtab = mtab
 
 -------------------------------------------------------------------------------
 
@@ -399,7 +400,17 @@ function filesystem.umount(fsOrPath)
         local node = filesystem.fstab[path]
         filesystem.fstab[path] = nil
         node.fs = nil
-        node.parent.children[node.name] = nil
+
+        local current = node
+        local parent = node.parent
+        if parent then
+            parent.children[current.name] = nil
+            -- Fix mtab
+            while parent and parent.parent and not parent.fs and not next(parent.children) and not next(parent.links) do
+                parent.parent.children[parent.name] = nil
+                parent = parent.parent
+            end
+        end
     end
     return #paths > 0
 end
