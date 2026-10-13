@@ -99,7 +99,7 @@ process.GROUP = {
     USERBG  = 8,
 }
 
-local SYSRESV = { [3] = true, [4] = true, [5] = true }
+local SYSRESV = { [4] = true, [5] = true }
 local DEFAULT_GROUP = process.GROUP.USER
 local MAX_UNPRIV_GROUP = process.GROUP.USERBG -- 8; 9+ needs the priv path
 

@@ -117,11 +117,18 @@ local function onComponentAdded(_, address, componentType)
   if polaris.config["debug"] then
     log("Component added: " .. componentType .. " : " .. address)
   end
+  if componentType == "filesystem" then
+    computer.pushSignal("filesystem_added", address, componentType)
+  end
 end
 
 local function onComponentRemove(_, address, componentType)
   if polaris.config["debug"] then
     log("Component removed: " .. componentType .. " : " .. address)
+  end
+
+  if componentType == "filesystem" then
+    computer.pushSignal("filesystem_removed", address, componentType)
   end
 
   if primaries[componentType] and primaries[componentType].address == address or

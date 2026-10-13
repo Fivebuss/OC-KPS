@@ -164,6 +164,26 @@ local function expandVars(str, getenv)
     return out, failMsg
 end
 
+-- Fine il seperate them
+local function expandToken(w, getenv)
+    local isSingle = (#w >= 2 and w:sub(1, 1) == "'" and w:sub(-1) == "'")
+    local isDouble = (#w >= 2 and w:sub(1, 1) == '"' and w:sub(-1) == '"')
+
+    local inner = (isSingle or isDouble) and w:sub(2, -2) or w
+    if isSingle then
+        return inner, nil
+    end
+
+    local expanded, failMsg = expandVars(inner, getenv)
+    if not isDouble then
+        if expanded == "~" or expanded:sub(1, 2) == "~/" then
+            local home = getenv("HOME") or "/"
+            expanded = home .. expanded:sub(2)
+        end
+    end
+    return expanded, failMsg
+end
+
 -- Text library is amazing
 local function splitTokensOn(tokens, op)
     local groups, current = {}, {}
@@ -290,15 +310,11 @@ local function parseSegment(words, getenv)
     local redirects = { stdinFile = nil, stdoutFile = nil, appendOut = false, fdRedirects = {} }
     local i = 1
     local expandFail
-    local function expand(w)
-        local out, failMsg = expandVars(stripQuotes(w), getenv)
-        expandFail = expandFail or failMsg
-        return out
-    end
     local function dealWithToken(w)
         local isQuoted = (#w >= 2) and
             ((w:sub(1, 1) == '"' and w:sub(-1) == '"') or (w:sub(1, 1) == "'" and w:sub(-1) == "'"))
-        local expanded = expand(w)
+        local expanded, failMsg = expandToken(w, getenv)
+        expandFail = expandFail or failMsg
         if isQuoted then return { expanded } end
         return expandWildcard(expanded)
     end
@@ -681,7 +697,9 @@ function builtins.clear()
 end
 
 function builtins.cd(args, _, _, _)
-    local target = args[1] or "/"
+    local env = polaris.env.current()
+
+    local target = args[1] or env.getenv("HOME") or "/"
     local full = resolvePath(currPath, target)
     if not filesystem.exists(full) then
         writeRed(tty, "cd: no such directory: " .. target, "\n")
@@ -1610,7 +1628,7 @@ local function runCommandGroup(lineOrTokens, getenv)
 
     if #assigns > 0 and #rest == 0 then
         for _, a in ipairs(assigns) do
-            locals[a.name] = expandVars(a.value, getenv)
+            locals[a.name] = expandToken(a.value, getenv)
         end
         lastExitCode = 0
         return
@@ -1624,7 +1642,7 @@ local function runCommandGroup(lineOrTokens, getenv)
         for _, a in ipairs(assigns) do
             saved[a.name] = locals[a.name]
             savedNames[#savedNames + 1] = a.name
-            locals[a.name] = expandVars(a.value, getenv)
+            locals[a.name] = expandToken(a.value, getenv)
         end
         words = rest
     end
