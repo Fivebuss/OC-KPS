@@ -5,5 +5,4 @@ if not ok then
 end
 
 -- Services can use this
-kps = {}
-kps.rc = {}
+polaris.rc = {}

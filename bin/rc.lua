@@ -1,13 +1,14 @@
 -- /bin/rc.lua
 -- I finally got around to doing it
 
--- rc                       list services
--- rc <name> [status]       state and log
+-- rc                           list services
+-- rc <name> [status]           state and log
 -- rc <name> start|stop|restart
+-- rc <name> <func> [args...]   call a arbitrary function
 
 local services = polaris.services
 
-local ACTIONS = { start = true, stop = true, restart = true, status = true }
+local BUILTIN = { start = true, stop = true, restart = true, status = true }
 local DONE = { start = "started", stop = "stopping", restart = "restarting" }
 
 local function secs(t)
@@ -56,6 +57,9 @@ local function status(name)
             io.writeln(string.format("  stopped  %s, %s%s", secs(s.stoppedAt), s.last.text,
                 s.last.requested and " (requested)" or ""))
         end
+        if #s.exports > 0 then
+            io.writeln("  exports  " .. table.concat(s.exports, ", "))
+        end
     end
 
     if #log > 0 then
@@ -70,21 +74,31 @@ if name == nil or (name == "status" and action == nil) then
     return list()
 end
 -- rc status <name> works maybe? Yes
-if ACTIONS[name] and action and not ACTIONS[action] then
+if BUILTIN[name] and action and not BUILTIN[action] then
     name, action = action, name
 end
 action = action or "status"
 
 if action == "status" then
     return status(name)
-elseif not ACTIONS[action] then
-    io.writelnError("rc: unknown command '" .. action .. "'")
-    return
-end
-
-local ok, err = polaris.call("service", action, name)
-if ok then
-    io.writeln(name .. ": " .. DONE[action])
+elseif action == "start" or action == "stop" or action == "restart" then
+    local ok, err = polaris.call("service", action, name)
+    if ok then
+        io.writeln(name .. ": " .. DONE[action])
+    else
+        io.writelnError("rc: " .. tostring(err))
+    end
 else
-    io.writelnError("rc: " .. tostring(err))
+    -- Run a function with args
+    local callArgs = {}
+    for i = 3, #args do callArgs[#callArgs + 1] = args[i] end
+
+    local ok, err = services.call(name, action, table.unpack(callArgs))
+    if not ok then
+        io.writelnError("rc: " .. tostring(err))
+    elseif err ~= nil then
+
+        io.writeln(tostring(ok))
+        if err ~= nil then io.writeln(tostring(err)) end
+    end
 end

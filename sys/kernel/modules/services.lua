@@ -3,7 +3,13 @@
 Privileged services, yeah they run in kernel space. I will use it for minitel probably
 User ones maybe sometime later?
 /etc/services/privileged/<name>.d/*
--- See the test.d example service
+
+Hey look! I did a thing. Services are like modules now
+start() is ran when the service is started
+stop()  is ran when the service is stopped (optional but like why wouldnt you have one)
+If there is no stop, the service is cancelled then eventually killed
+Use any arbitrary functions, usable via rc <name> <func> [args...]
+You cannot define 'restart' or 'status' as functions.
 
 Process stuff:
 GID is #3, SVC
@@ -11,10 +17,9 @@ PPID is 1, the kernel
 Uses types stream,custom,custom for i/o
 Shares the _ENV with kernel, and so things get copied downwards
 
-Also, the configs are not re-read, because I am lazy. So reboot if changing config
-
 services.load() / boot(): scan everything and deal with autostarts
 services.start(name, delay) / stop(name) / restart(name): nil, reason on failure
+services.call(name, func, ...): call a exported function on a running service
 services.list(): names by their priority, services.status(name), services.log(name)
 services.halt(): Stop dealing with exits
 ]]
@@ -29,7 +34,8 @@ local process = polaris.process
 local kernelEnv = _G
 
 local ROOT = "/etc/services/privileged"
-local DEFAULTS = { priority = 0, onExit = "stop", autostart = true, restartDelay = 1, stopTimeout = 5 }
+local DEFAULTS = { priority = 0, onExit = "stop", autostart = true, restartDelay = 1, stopTimeout = 5, resetLog = false }
+local RESERVED = { status = true, restart = true }
 
 local services = {}
 local entries = {}
@@ -88,7 +94,32 @@ local function validate(name, cfg)
     if type(c.autostart) ~= "boolean" then return nil, "autostart must be a boolean" end
     if type(c.restartDelay) ~= "number" or c.restartDelay < 0 then return nil, "bad restartDelay" end
     if type(c.stopTimeout) ~= "number" or c.stopTimeout <= 0 then return nil, "bad stopTimeout" end
+    if type(c.resetLog) ~= "boolean" then return nil, "resetLog must be a boolean" end
     return c
+end
+
+-- Is it a good service? I hope
+local function loadModule(path)
+    local fn, err = compile(path)
+    if not fn then return nil, err end
+
+    local ok, mod = pcall(fn)
+    if not ok then return nil, mod end
+
+    if type(mod) ~= "table" then
+        return nil, "init.lua must return a table"
+    end
+    if type(mod.start) ~= "function" then
+        return nil, "service table must have a start() function"
+    end
+
+    for key in pairs(mod) do
+        if RESERVED[key] then
+            return nil, "service table uses reserved name: " .. key
+        end
+    end
+
+    return mod
 end
 
 local function register(name)
@@ -114,6 +145,7 @@ local function register(name)
         starts = 0,
         stopping = false,
         restarting = false,
+        mod = nil,
     }
 end
 
@@ -185,15 +217,33 @@ function services.start(name, delay)
         return true
     end
 
-    local fn, err = compile(e.init)
-    if not fn then
-        e.ring:push("svc", "start failed: " .. tostring(err))
+    if e.cfg.resetLog then
+        e.ring = ring.new(polaris.config["service_log_buffer_length"] or 64)
+    end
+
+    -- Reload so restart picks up changes
+    local cfg, cfgErr = loadConfig(filesystem.concat(ROOT, name .. ".d", "config.lua"))
+    if cfgErr then
+        e.ring:push("svc", "start failed (config): " .. tostring(cfgErr))
+        return nil, cfgErr
+    end
+    local c, reason = validate(name, cfg)
+    if not c then
+        e.ring:push("svc", "start failed (config): " .. reason)
+        return nil, reason
+    end
+    e.cfg = c
+
+    local mod, err = loadModule(e.init)
+    if not mod then
+        e.ring:push("svc", "start failed (load): " .. tostring(err))
         return nil, err
     end
+    e.mod = mod
 
     local pid
     pid = process.spawn(function()
-        local ok, failure = xpcall(fn, function(msg)
+        local ok, failure = xpcall(mod.start, function(msg)
             process.writeError(debug.traceback(tostring(msg), 2), "\n")
             return msg
         end, e.name)
@@ -222,21 +272,33 @@ function services.stop(name)
     local e = entries[name]
     if not e then return nil, "no such service: " .. tostring(name) end
 
-    if e.timer then -- Delayed start for whatever reason
+    if e.timer then
         event.cancel(e.timer)
         e.timer = nil
         return true
     end
+
     if not e.pid then return nil, "not running" end
     if e.stopping then return true end
 
     local pid = e.pid
     e.stopping = true
+
+    if e.mod and type(e.mod.stop) == "function" then
+        local ok, err = pcall(e.mod.stop, e.name)
+        if not ok then
+            e.ring:push("svc", "stop() error: " .. tostring(err))
+        end
+    end
+
     process.cancel(pid)
     e.killTimer = event.timer(e.cfg.stopTimeout, function()
         e.killTimer = nil
-        process.kill(pid)
+        if e.pid == pid then
+            process.kill(pid)
+        end
     end, 1)
+
     return true
 end
 
@@ -247,6 +309,40 @@ function services.restart(name)
 
     e.restarting = true
     return services.stop(name)
+end
+
+-- Run a function from the thing, like changing a config value
+function services.call(name, func, ...)
+    local e = entries[name]
+    if not e then return nil, "no such service: " .. tostring(name) end
+    if RESERVED[func] then return nil, "'" .. func .. "' is reserved" end
+
+    if not e.mod then return nil, "service not loaded" end
+
+    local fn = e.mod[func]
+    if type(fn) ~= "function" then
+        return nil, "no such function '" .. func .. "' in service '" .. name .. "'"
+    end
+
+    local results = table.pack(pcall(fn, ...))
+    local ok = table.remove(results, 1)
+    results.n = results.n - 1
+
+    if not ok then
+        local err = tostring(results[1])
+        e.ring:push("svc", func .. "() error: " .. err)
+        return nil, err
+    end
+
+    local parts = {}
+    for i = 1, results.n do parts[i] = tostring(results[i]) end
+    if #parts > 0 then
+        e.ring:push("svc", func .. "() : " .. table.concat(parts, ", "))
+    else
+        e.ring:push("svc", func .. "()")
+    end
+
+    return table.unpack(results, 1, results.n)
 end
 
 function services.list()
@@ -268,6 +364,17 @@ function services.status(name)
         state = "never started"
     end
 
+    -- Exported functions
+    local exports = {}
+    if e.mod then
+        for k, v in pairs(e.mod) do
+            if type(v) == "function" and k ~= "start" and k ~= "stop" and not RESERVED[k] then
+                exports[#exports + 1] = k
+            end
+        end
+        table.sort(exports)
+    end
+
     return {
         name = e.name,
         label = e.cfg.label,
@@ -279,8 +386,9 @@ function services.status(name)
         starts = e.starts,
         startedAt = e.startedAt,
         stoppedAt = e.stoppedAt,
-        last = e.last, -- { success, reason, requested, text }
+        last = e.last,
         proc = e.pid and process.get(e.pid) or nil,
+        exports = exports,
     }
 end
 
