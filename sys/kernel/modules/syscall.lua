@@ -130,29 +130,12 @@ polaris.syscalls.execute = function(ctx, path, env)
     return fn()
 end
 
--- Priveleged syscall stuff
+-- Fancy
 polaris.syscalls.service = function(_, action, name)
     if action ~= "start" and action ~= "stop" and action ~= "restart" then
         error("service: unknown action '" .. tostring(action) .. "'", 0)
     end
     return polaris.services[action](name)
-end
-
--- Custom PGIDs
-polaris.syscalls.setpgid = function(ctx, pid, gid)
-    local process = polaris.process
-    local targetPid = pid or (ctx and ctx.caller)
-
-    if targetPid == nil then
-        error("setpgid: no pid given and no caller context", 0)
-    end
-
-    local ok, resultGid = process.setGroupPriv(targetPid, gid)
-    if not ok then
-        error("setpgid: " .. tostring(resultGid or "failed"), 0)
-    end
-
-    return resultGid
 end
 
 return call

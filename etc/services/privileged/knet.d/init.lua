@@ -22,10 +22,8 @@ local computer = require("computer")
 local filesystem = require("filesystem")
 local serial = require("serialization")
 
-kps = kps or {}
-kps.rc = kps.rc or {}
-kps.rc.knet = kps.rc.knet or {}
-local knet = kps.rc.knet
+polaris.rc.knet = polaris.rc.knet or {}
+local knet = polaris.rc.knet
 
 local listeners = {}
 local timers = {}

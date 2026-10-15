@@ -55,7 +55,6 @@ function _G.status(msg)
     end
 end
 
-status("GPU Initialized")
 status("Booting " .. _G._OSVERSION)
 status("===============")
 
@@ -96,9 +95,6 @@ status("Executing stage 2 boot")
 
 -- Now that things have been prepared
 
--- Tell the system that initialization is complete.
-computer.pushSignal("kinit")
-
 local bootScripts = {}
 for file in filesystem.list("/boot") do
     local path = "/boot/" .. file
@@ -122,7 +118,6 @@ end
 
 -- Enter scheduler loop
 -- No matter what you do, no matter how hard you try you will always be in a busy loop lmao
-computer.pushSignal("init")
 
 local event_internals =
     require("event_internals")

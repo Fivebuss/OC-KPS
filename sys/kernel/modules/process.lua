@@ -26,7 +26,7 @@ Process groups are just custom because linux is weird so we wont use theirs
     USERFG  = 7,
     USERBG  = 8,
   }
-  9+ is custom defined and needs setpgid syscall
+  9+ is custom defined
   About mismanaged:
   If a group is told to die and one process is stubborn it gets assigned here
   Yes this is useful I swear. No but really, it is as the kernel can try ways to force it to die
@@ -414,7 +414,7 @@ function process.setGroup(pid, gid)
     return true, newGid
 end
 
--- A syscall handles this
+-- Custom group ids
 function process.setGroupPriv(pid, gid)
     if isKernelPid(pid) then return false end
 
