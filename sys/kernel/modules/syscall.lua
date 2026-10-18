@@ -14,7 +14,7 @@ local function prepareHalt(signal, keepUid)
     -- Send out INT
     local scheduler = polaris.scheduler
     for _, info in ipairs(scheduler.list()) do
-        local uid = info.uid
+        local uid = info.cid
         if uid ~= kernelUid and uid ~= keep then
             scheduler.signal(uid, scheduler.SIG.INT)
         end

@@ -11,12 +11,12 @@ Lsched
 Cooperative multitasking. Kinda
 Oh look, a bigass comment block. Thanks AI I am not typing all of it this time
 
-scheduler.spawn(fn, onExit, label, handlers): returns uid
+scheduler.spawn(fn, onExit, label, handlers): returns cid
     handlers (optional): {
         INT  = function(sig, ...) end,
         CONT = function(sig, ...) end,
         HUP  = function(sig, ...) end,
-        CHLD = function(childUid, ok, result, ...) end,
+        CHLD = function(childCid, ok, result, ...) end,
     }
     A custom handler REPLACES the default action for that signal.
     The signal is still delivered to the thread itself at its next
@@ -32,7 +32,7 @@ Get the signal's arguments with scheduler.lastSignal().
 Default actions (used when no handler is attached):
     INT / HUP : thread is cancelled and dies at its next yield, with a final resume for cleanup
     CHLD      : queued and delivered on the next resume; nothing is killed.
-    CONT      : scheduler.cont(uid)
+    CONT      : scheduler.cont(cid)
     TSTP      : hard stop (Ctrl+Z), not interceptable
     KILL      : hard kill, not interceptable
 
@@ -40,22 +40,22 @@ scheduler.sleep(seconds) -> sig|nil      (now returns a delivered signal, if any
 scheduler.waitForInput() -> value|sig    (a signal can preempt queued input)
 scheduler.yield() -> sig|nil             sleep(0). cheap checkpoint, use in loops
 scheduler.isSignal(v) -> boolean
-scheduler.lastSignal(uid) -> sig, ..
-scheduler.sendData(uid, value) -> boolean
-scheduler.activeThread() -> uid or nil
+scheduler.lastSignal(cid) -> sig, ..
+scheduler.sendData(cid, value) -> boolean
+scheduler.activeThread() -> cid or nil
 scheduler.isBusy() -> boolean
 scheduler.threadCount() -> number
-scheduler.list() / scheduler.info(uid)
-scheduler.signal(uid, sig, ...) -> boolean
+scheduler.list() / scheduler.info(cid)
+scheduler.signal(cid, sig, ...) -> boolean
 scheduler.signalAll(sig)
-scheduler.pendingSignal(uid) -> sig|nil
+scheduler.pendingSignal(cid) -> sig|nil
 scheduler.init(event, tickInterval) -> handlerId
 
 -- Cancellation --
-scheduler.kill(uid): Makes a coroutine die without telling it
-scheduler.cancel(uid): Thread dies at its next yield
-scheduler.isCancelled(uid): returns boolean
-scheduler.killAll(exceptUid)
+scheduler.kill(cid): Makes a coroutine die without telling it
+scheduler.cancel(cid): Thread dies at its next yield
+scheduler.isCancelled(cid): returns boolean
+scheduler.killAll(exceptCid)
 scheduler.cancelAll()
 
 
@@ -87,8 +87,8 @@ scheduler.sig = {}
 
 local threads = {}
 local threadCount = 0
-local activeUid = nil
-local nextUid = 0
+local activeCid = nil
+local nextCid = 0
 
 -- Lets order stuff together
 local order = {}
@@ -115,10 +115,10 @@ local math_huge = math.huge
 local function compactOrder()
     local w = 1
     for i = 1, orderCount do
-        local uid = order[i]
+        local cid = order[i]
         order[i] = nil
-        if uid and threads[uid] then
-            order[w] = uid
+        if cid and threads[cid] then
+            order[w] = cid
             w = w + 1
         end
     end
@@ -127,21 +127,21 @@ local function compactOrder()
 end
 
 -- Tell a thread's parent that its child died, so morbid
-local function notifyChildExit(parent, childUid, ok, val)
-    if parent and parent ~= childUid and threads[parent] then
-        scheduler.signal(parent, scheduler.SIG.CHLD, childUid, ok, val)
+local function notifyChildExit(parent, childCid, ok, val)
+    if parent and parent ~= childCid and threads[parent] then
+        scheduler.signal(parent, scheduler.SIG.CHLD, childCid, ok, val)
     end
 end
 
 -- Goodbye thread
-local function reap(uid, t)
+local function reap(cid, t)
     local parent = t.parent
 
-    threads[uid] = nil
+    threads[cid] = nil
     threadCount = threadCount - 1
     orderHoles = orderHoles + 1
 
-    if uid ~= activeUid and poolCount < MAX_POOL then
+    if cid ~= activeCid and poolCount < MAX_POOL then
         t.co = nil
         t.wakeAt = nil
         t.waiting = nil
@@ -246,8 +246,8 @@ function scheduler.isSignal(v)
 end
 
 -- Walkie talkie
-function scheduler.sendData(uid, value)
-    local t = threads[uid]
+function scheduler.sendData(cid, value)
+    local t = threads[cid]
     if not t then
         return false
     end
@@ -265,17 +265,17 @@ function scheduler.sendData(uid, value)
 end
 
 -- "proper" Signals
--- CHLD: signal(parent, CHLD, childUid, ok, result)
-function scheduler.signal(uid, sig, ...)
-    local t = threads[uid]
+-- CHLD: signal(parent, CHLD, childCid, ok, result)
+function scheduler.signal(cid, sig, ...)
+    local t = threads[cid]
     if not t then return false end
 
     -- No you cannot handle kill lol
     if sig == scheduler.SIG.KILL then
-        return scheduler.kill(uid)
+        return scheduler.kill(cid)
     end
     if sig == scheduler.SIG.TSTP then
-        return scheduler.stop(uid)
+        return scheduler.stop(cid)
     end
 
     -- Thread sees all this
@@ -286,9 +286,9 @@ function scheduler.signal(uid, sig, ...)
 
     if h then
         -- omg handlers
-        h(uid, sig, ...)
+        h(cid, sig, ...)
     elseif sig == scheduler.SIG.CONT then
-        scheduler.cont(uid)
+        scheduler.cont(cid)
     elseif sig == scheduler.SIG.INT or sig == scheduler.SIG.HUP then
         -- Im so kind, I give it one more resume to deal with cleanup by default
         t.cancelled = true
@@ -314,19 +314,19 @@ end
 
 function scheduler.signalAll(sig)
     local uids = {}
-    for uid in pairs(threads) do uids[#uids + 1] = uid end
+    for cid in pairs(threads) do uids[#uids + 1] = cid end
     for i = 1, #uids do scheduler.signal(uids[i], sig) end
 end
 
 -- Left on delivered, tragic
-function scheduler.pendingSignal(uid)
-    local t = threads[uid or activeUid]
+function scheduler.pendingSignal(cid)
+    local t = threads[cid or activeCid]
     return t and t.pendingSignal or nil
 end
 
 -- Hey, what happened?
-function scheduler.lastSignal(uid)
-    local t = threads[uid or activeUid]
+function scheduler.lastSignal(cid)
+    local t = threads[cid or activeCid]
     if not t then return nil end
     local args = t.lastSignalArgs
     if args then
@@ -342,8 +342,8 @@ function scheduler.spawn(fn, onExit, label, handlers)
     checkArg(3, label, "string", "nil")
     checkArg(4, handlers, "table", "nil")
 
-    nextUid = nextUid + 1
-    local uid = nextUid
+    nextCid = nextCid + 1
+    local cid = nextCid
 
     -- Reuse a dead record if we have one
     local t
@@ -355,7 +355,7 @@ function scheduler.spawn(fn, onExit, label, handlers)
         t = {}
     end
 
-    threads[uid] = t
+    threads[cid] = t
 
     t.co = coroutine_create(fn)
     t.wakeAt = nil
@@ -380,7 +380,7 @@ function scheduler.spawn(fn, onExit, label, handlers)
     t.condemned = false
     -- For the love of god can handlers not be so horrible
     t.handlers = handlers
-    t.parent = activeUid
+    t.parent = activeCid
     t.label = label or "?"
     t.spawnedAt = computer_uptime()
     t.stopped = nil
@@ -388,11 +388,11 @@ function scheduler.spawn(fn, onExit, label, handlers)
 
     -- order time
     orderCount = orderCount + 1
-    order[orderCount] = uid
+    order[orderCount] = cid
 
     threadCount = threadCount + 1
 
-    return uid
+    return cid
 end
 
 function scheduler.isBusy()
@@ -407,9 +407,9 @@ end
 function scheduler.list()
     local out = {}
     local now = computer_uptime()
-    for uid, t in pairs(threads) do
+    for cid, t in pairs(threads) do
         local entry = {
-            uid = uid,
+            cid = cid,
             label = t.label or "?",
             status = coroutine_status(t.co), -- "suspended", "running", "normal", "dead"
             waiting = t.waiting or false,    -- blocked in waitForInput
@@ -425,12 +425,12 @@ function scheduler.list()
 end
 
 -- Look up info by a id
-function scheduler.info(uid)
-    local t = threads[uid]
+function scheduler.info(cid)
+    local t = threads[cid]
     if not t then return nil end
     local now = computer_uptime()
     return {
-        uid = uid,
+        cid = cid,
         label = t.label or "?",
         status = coroutine_status(t.co),
         waiting = t.waiting or false,
@@ -443,8 +443,8 @@ function scheduler.info(uid)
 end
 
 -- CTRL Z
-function scheduler.stop(uid)
-    local t = threads[uid]
+function scheduler.stop(cid)
+    local t = threads[cid]
     if not t or t.stopped then return false end
 
     t.stopped = true
@@ -458,8 +458,8 @@ function scheduler.stop(uid)
 end
 
 -- Continue normally
-function scheduler.cont(uid)
-    local t = threads[uid]
+function scheduler.cont(cid)
+    local t = threads[cid]
     if not t or not t.stopped then return false end
 
     t.stopped = false
@@ -472,34 +472,34 @@ function scheduler.cont(uid)
     return true
 end
 
-function scheduler.isStopped(uid)
-    local t = threads[uid or activeUid]
+function scheduler.isStopped(cid)
+    local t = threads[cid or activeCid]
     return t ~= nil and t.stopped or false
 end
 
 -- Makes a coroutine die
-function scheduler.kill(uid)
-    local t = threads[uid]
+function scheduler.kill(cid)
+    local t = threads[cid]
     if not t then
         return false
     end
 
     local onExit = t.onExit
-    local parent = reap(uid, t)
+    local parent = reap(cid, t)
 
     -- Cant exactly do this
     if onExit then
         onExit(false, "killed")
     end
 
-    notifyChildExit(parent, uid, false, "killed")
+    notifyChildExit(parent, cid, false, "killed")
 
     return true
 end
 
 -- Tells a coroutine to die. This time for real
-function scheduler.cancel(uid)
-    local t = threads[uid]
+function scheduler.cancel(cid)
+    local t = threads[cid]
     if not t or t.cancelled then
         return false
     end
@@ -534,8 +534,8 @@ function scheduler.exit(code)
         code = 0
     end
 
-    local uid = activeUid
-    local t = threads[uid]
+    local cid = activeCid
+    local t = threads[cid]
 
     if not t or t.exiting then
         return false
@@ -564,26 +564,26 @@ function scheduler.exit(code)
     return true
 end
 
--- Check cancellation flag for any uid
-function scheduler.isCancelled(uid)
-    local t = threads[uid or activeUid]
+-- Check cancellation flag for any cid
+function scheduler.isCancelled(cid)
+    local t = threads[cid or activeCid]
     return t ~= nil and t.cancelled or false
 end
 
 -- Tells all coroutines to go die
 function scheduler.cancelAll()
-    for uid in pairs(threads) do
-        scheduler.cancel(uid)
+    for cid in pairs(threads) do
+        scheduler.cancel(cid)
     end
 end
 
 -- Kills all coroutines
-function scheduler.killAll(exceptUid)
+function scheduler.killAll(exceptCid)
     local uids = {}
 
-    for uid in pairs(threads) do
-        if uid ~= exceptUid then
-            uids[#uids + 1] = uid
+    for cid in pairs(threads) do
+        if cid ~= exceptCid then
+            uids[#uids + 1] = cid
         end
     end
 
@@ -592,14 +592,14 @@ function scheduler.killAll(exceptUid)
     end
 
     -- I gotta word this better
-    if exceptUid and threads[exceptUid] then
-        reap(exceptUid, threads[exceptUid])
+    if exceptCid and threads[exceptCid] then
+        reap(exceptCid, threads[exceptCid])
     end
 end
 
--- Returns the UID of the active thread
+-- Returns the CID of the active thread
 function scheduler.activeThread()
-    return activeUid or nil
+    return activeCid or nil
 end
 
 -- Cleans up all handlers
@@ -677,12 +677,12 @@ local function tick(...)
 
     local i = 1
     while i <= oc do
-        local uid = order[i]
-        local t = uid and thr[uid]
+        local cid = order[i]
+        local t = cid and thr[cid]
         if t and not t.waiting and not t.stopped then
             local ready = (t.wakeAt == nil) or (now >= t.wakeAt)
             if ready then
-                activeUid = uid
+                activeCid = cid
 
                 local ok, a, b, c
                 local sig = t.pendingSignal
@@ -715,35 +715,35 @@ local function tick(...)
                     ok, a, b, c = coroutine_resume(t.co, ...)
                 end
 
-                activeUid = nil
+                activeCid = nil
 
                 -- thread might have been killed by itself or another thread
                 -- mid-resume
-                if thr[uid] ~= t then
+                if thr[cid] ~= t then
                     -- gone already, nothing more to do
                 elseif t.exiting then
                     local onExit = t.onExit
                     local exitCode = t.exitCode
-                    local parent = reap(uid, t)
+                    local parent = reap(cid, t)
                     if onExit then
                         onExit(true, exitCode)
                     end
-                    notifyChildExit(parent, uid, true, exitCode)
+                    notifyChildExit(parent, cid, true, exitCode)
                 elseif not ok then
                     if klog then klog("Scheduler: tick failure: coroutine error! | " .. tostring(a)) end
                     local onExit = t.onExit
-                    local parent = reap(uid, t)
+                    local parent = reap(cid, t)
                     if onExit then onExit(false, a) end
-                    notifyChildExit(parent, uid, false, a)
+                    notifyChildExit(parent, cid, false, a)
                 elseif coroutine_status(t.co) == "dead" then
                     local onExit = t.onExit
-                    local parent = reap(uid, t)
+                    local parent = reap(cid, t)
                     if a == "cancelled" then
                         if onExit then onExit(true, "cancelled") end
-                        notifyChildExit(parent, uid, true, "cancelled")
+                        notifyChildExit(parent, cid, true, "cancelled")
                     else
                         if onExit then onExit(true, a, b, c) end
-                        notifyChildExit(parent, uid, true, a)
+                        notifyChildExit(parent, cid, true, a)
                     end
                 else
                     local reason = a
@@ -751,19 +751,19 @@ local function tick(...)
                     if t.condemned then
                         -- Lol its cancelled
                         local onExit = t.onExit
-                        local parent = reap(uid, t)
+                        local parent = reap(cid, t)
                         if onExit then
                             onExit(true, "cancelled")
                         end
-                        notifyChildExit(parent, uid, true, "cancelled")
+                        notifyChildExit(parent, cid, true, "cancelled")
                     elseif reason == "cancelled" then
                         -- Fix old stuff?
                         local onExit = t.onExit
-                        local parent = reap(uid, t)
+                        local parent = reap(cid, t)
                         if onExit then
                             onExit(true, "cancelled")
                         end
-                        notifyChildExit(parent, uid, true, "cancelled")
+                        notifyChildExit(parent, cid, true, "cancelled")
                     elseif reason == "sleep" and type(b) == "number" then
                         t.wakeAt = now + b
                         t.waiting = false
