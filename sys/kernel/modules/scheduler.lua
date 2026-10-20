@@ -8,55 +8,7 @@
 --[[
 
 Lsched
-Cooperative multitasking. Kinda
-Oh look, a bigass comment block. Thanks AI I am not typing all of it this time
-
-scheduler.spawn(fn, onExit, label, handlers): returns cid
-    handlers (optional): {
-        INT  = function(sig, ...) end,
-        CONT = function(sig, ...) end,
-        HUP  = function(sig, ...) end,
-        CHLD = function(childCid, ok, result, ...) end,
-    }
-    A custom handler REPLACES the default action for that signal.
-    The signal is still delivered to the thread itself at its next
-    yield point (see below). CHLD fires when a thread spawned by this
-    thread dies. TSTP and KILL are always hard and cannot be intercepted.
-
-Signals are delivered as resume values. Whatever the thread yielded --
-scheduler.sleep(), scheduler.waitForInput(), or a plain coroutine.yield() --
-comes back as the signal name ("INT", "HUP", "CHLD", ...) if a signal was
-pending when the scheduler resumed it. Test with scheduler.isSignal(v).
-Get the signal's arguments with scheduler.lastSignal().
-
-Default actions (used when no handler is attached):
-    INT / HUP : thread is cancelled and dies at its next yield, with a final resume for cleanup
-    CHLD      : queued and delivered on the next resume; nothing is killed.
-    CONT      : scheduler.cont(cid)
-    TSTP      : hard stop (Ctrl+Z), not interceptable
-    KILL      : hard kill, not interceptable
-
-scheduler.sleep(seconds) -> sig|nil      (now returns a delivered signal, if any)
-scheduler.waitForInput() -> value|sig    (a signal can preempt queued input)
-scheduler.yield() -> sig|nil             sleep(0). cheap checkpoint, use in loops
-scheduler.isSignal(v) -> boolean
-scheduler.lastSignal(cid) -> sig, ..
-scheduler.sendData(cid, value) -> boolean
-scheduler.activeThread() -> cid or nil
-scheduler.isBusy() -> boolean
-scheduler.threadCount() -> number
-scheduler.list() / scheduler.info(cid)
-scheduler.signal(cid, sig, ...) -> boolean
-scheduler.signalAll(sig)
-scheduler.pendingSignal(cid) -> sig|nil
-scheduler.init(event, tickInterval) -> handlerId
-
--- Cancellation --
-scheduler.kill(cid): Makes a coroutine die without telling it
-scheduler.cancel(cid): Thread dies at its next yield
-scheduler.isCancelled(cid): returns boolean
-scheduler.killAll(exceptCid)
-scheduler.cancelAll()
+Cooperative multitasking. Kinda. It uses a lua GC trick where a coroutine reference missing causes it to silently die, so kill actually works. Thats it.
 
 
 --]]

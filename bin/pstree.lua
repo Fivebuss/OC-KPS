@@ -6,7 +6,7 @@ local getopt = require("ksh.getopt")
 local process = polaris.process
 
 local GROUP_NAMES = {}
-for name, gid in pairs(process.GROUP) do
+for name, gid in pairs(process.GID) do
     if type(gid) == "number" then
         GROUP_NAMES[gid] = name
     end

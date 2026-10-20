@@ -2,7 +2,7 @@
 -- Okay more stuff ported
 
 local process = polaris.process
-polaris.analytics.addEvent("ksh")
+polaris.analytics.addEvent("ksh-" .. process.self().uid)
 local filesystem = require("filesystem")
 local io = polaris.io
 local text = require("text")
@@ -16,8 +16,8 @@ local function writeRed(stream, ...)
 end
 
 local tty = polaris.console.openTTY({
-    gpu   = polaris.console._spawnGpu,
-    owner = process.self(),
+    gpu   = gpu,
+    owner = process.self().pid,
 })
 
 tty:setCursorShape("underline")
@@ -65,7 +65,7 @@ end
 -- Deal with signals
 local signalPrompt = false
 tty.onSignal = function(_, sig)
-    process.signalGroup(process.GROUP.USERFG, sig)
+    process.signalGroup(process.GID.FG, sig)
     if not fgBusy then
         drawPrompt()
         signalPrompt = true
@@ -538,7 +538,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
 
     local results = {}
     local remaining = segCount
-    local waiterPid = process.self()
+    local waiterPid = process.self().pid
     local spawnedAny = false
     local pids = {}
 
@@ -656,7 +656,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                     end
                 end, {
                     label = seg.args[1],
-                    pgid = process.GROUP.USERFG,
+                    pgid = process.GID.FG,
                     ppid = shellPid,
                     onExit = function(success, exitCode)
                         local code = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
@@ -1776,7 +1776,6 @@ local function shellLoop()
     end
 
     tty:clear()
-    polaris.analytics.addEvent("console")
     sourceFile("/etc/.kshrc", env.getenv)
 
     while true do
@@ -1798,7 +1797,7 @@ end
 
 shellPid = process.spawn(shellLoop, {
     label = "ksh",
-    pgid = process.GROUP.USER,
+    pgid = process.GID.USER,
     onExit = function(success, reason)
         if polaris.config["debug"] == true then
             computer.beep(2000)

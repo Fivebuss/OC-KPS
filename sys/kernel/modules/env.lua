@@ -133,10 +133,13 @@ end
 -- Current one
 function env.current()
     local p = process()
-    local pid = p and p.self()
+    local info = p and p.self()
+    local pid = info and info.pid
+
     if not pid then
         return _G
     end
+
     return env.forProcess(pid)
 end
 

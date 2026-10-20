@@ -1,5 +1,6 @@
 local computer = require("computer")
 local condraw = require("ksh.condraw")
+local process = require("process")
 
 local version = getenv("VERSION")
 
@@ -7,17 +8,18 @@ local total = computer.totalMemory() / 1024
 local free = computer.freeMemory() / 1024
 
 local boot = polaris.analytics and polaris.analytics.boot or {}
-local ksh = boot.ksh
+local ksh = boot["kshlaunch-" .. process.self().uid]
 
 local reached
-if ksh then
-    reached = string.format("%.3fs", ksh.uptime)
+if ksh and ksh.uptime then
+    local elapsed = computer.uptime() - ksh.uptime
+    reached = string.format("%.3fs", elapsed)
 else
     reached = "unknown"
 end
 
 local text = string.format(
-    "ksh v%s\n%s\n%.1fK total %.1fK free\nReached shell in %s",
+    "ksh v%s\n%s\n%.1fK total %.1fK free\nReached ksh in %s",
     version,
     "",
     total,

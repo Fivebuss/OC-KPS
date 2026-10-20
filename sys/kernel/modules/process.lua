@@ -2,10 +2,8 @@
 --[[
 Process module. Yeah its a connector between i/o and scheduler
 And because the current handling of scheduler was weird
-Plus it is helpful for signal stuff and when I add children and more signal stuff
 
-Anyway it is a manager for scheduler + fd 0,1,2 
-As such it copies alot and imports scheduler.
+It also sets up fd 0,1,2
 So userspace doesnt need to care about my aweful scheduler internals :)
 
 Child parent rules are freaky. Okay so:
@@ -13,61 +11,18 @@ Inherit groups
 Inherit PPID
 Usually kernel-owned if not chosen
 SIGCHLD is just a signal sent to a parent
-Can set a opts.onOrphaned to figure out if it's parent dies
 If a parent dies the kernel owns it
 
-Process groups are just custom because linux is weird so we wont use theirs
-  process.GROUP = {
-    SYS     = 1, -- kernel lives here, you cannot touch it. Normally
-    MISM    = 2, -- "mismanaged" yeah this is helpful for me, see below
-    SVC     = 3, -- privileged services, see services.lua
-    SYSRESV = {4,5}, -- system reserved, only spawn's opts.reserved enters them
-    USER    = 6, -- default group for anything unless it specifies one
-    USERFG  = 7,
-    USERBG  = 8,
-  }
-  9+ is custom defined
-  About mismanaged:
-  If a group is told to die and one process is stubborn it gets assigned here
-  Yes this is useful I swear. No but really, it is as the kernel can try ways to force it to die
-  And great for debugging i/o
+Groups are different from linux, they are pretty self explanatory except:
+SVC/service, kernel is here. It IS a service after all due to syscalls
+MISM exists due to weird coroutine state stuff:
+If it refuses to die it is moved here
+idk how it could even end up here without OC GC killing it but whatever
+However weird process stuff can cause it
 
-
-
-
-Functions of this
-  process.spawn(fn, opts): opts = { onExit, label, ppid, pgid, onOrphaned, reserved }. Returns pid
-  process.self(): pid of the currently running process, or nil
-  process.exists(pid): Does it?
-  process.get(pid): copy of that processs table entry, or nil
-  process.list(): copy of the whole process table ps style
-  process.exit(code): exit the current process
-  process.kill(pid): Kills a process without asking
-  process.cancel(pid) / process.cancelAll(): ask nicely for one to die
-  process.isCancelled(pid) Terminated?
-  process.signal(pid, sig) / process.signalAll(sig): SIG.* spam
-  process.pendingSignal(pid)
-  process.stop(pid) / process.cont(pid) / process.isStopped(pid): ^Z
-  process.SIG: scheduler.SIG
-
-  process.children(pid): list of pids parented to pid right now
-  process.parent(pid): ppid, or kernel pid if orphaned/none
-  process.getGroup(pid) / process.setGroup(pid, gid) / process.setGroupPriv(pid, gid, token)
-  process.groupMembers(gid) / process.killGroup(gid) / process.signalGroup(gid, sig)
-  process.reapGroup(gid): group-kill survivors into MISM
-  process.GROUP: group id constants
-
-  process.sleep(seconds)
-  process.waitForInput(): Waits for input
-  process.send(pid, value): wake a process blocked in waitForInput
-
-  process.create(pid, stdin, stdout, stderr) / process.destroy(pid)
-  process.stream(fd, file) / process.input/output/error(file)
-  process.write(...) / process.writeError(...)
-  process.closeAll(pid)
-  process.describe(pid)
 --]]
 
+local scheduler = polaris.scheduler
 local io = require("io")
 
 local process = {}
@@ -78,7 +33,7 @@ process.SIG = {
     TSTP  = "TSTP",
     CONT  = "CONT",
     HUP   = "HUP",
-    CHLD  = "CHLD", -- Yes I know not a handler bite me 
+    CHLD  = "CHLD", -- Yes I know not a handler bite me
 
     [1]  = "HUP",
     [2]  = "INT",
@@ -88,20 +43,23 @@ process.SIG = {
     [20] = "TSTP",
 }
 
--- omg process groups
-process.GROUP = {
-    SYS     = 1,
-    MISM    = 2,
-    SVC     = 3,
-    -- 4,5 = sysresv reserved
-    USER    = 6,
-    USERFG  = 7,
-    USERBG  = 8,
+-- omg process groups, but per-user this time
+process.GID = {
+    SVC  = 1, -- services + kernel if uid 0
+    USER = 2, -- default
+    FG   = 3,
+    BG   = 4,
+    MISM = 5, -- "mismanaged" see above
 }
 
-local SYSRESV = { [4] = true, [5] = true }
-local DEFAULT_GROUP = process.GROUP.USER
-local MAX_UNPRIV_GROUP = process.GROUP.USERBG -- 8; 9+ needs the priv path
+local GIDSET = {}
+for _, v in pairs(process.GID) do
+    GIDSET[v] = true
+end
+
+local KERNEL_UID = 0
+local DEFAULT_GID = process.GID.USER
+local MAX_UNPRIV_GID = process.GID.MISM -- 6-8 unused
 
 -- This is weird but it syncs
 local table_ = {}
@@ -109,62 +67,68 @@ local table_ = {}
 -- [pid] = { [0]=stdin desc, [1]=stdout desc, [2]=stderr desc }
 local processIO = {}
 
--- [gid] = { [pid] = true }
+-- [uid] = { [gid] = { [pid] = true } }
 local groups = {}
 
--- pids mid-group kill
--- [gid] = { [pid] = true }
 local pendingGroupKill = {}
 
-local function scheduler()
-    return polaris.scheduler
-end
-
--- Show the kernel 
+-- Kernel
 local kernelRegistered = false
 
 local function isKernelPid(pid)
-    return pid ~= nil and pid == scheduler().kernelProcess
+    return pid ~= nil and pid == scheduler.kernelProcess
 end
 
 local function isKernel()
     if kernelRegistered then return end
 
-    local kpid = scheduler().kernelProcess
+    local kpid = scheduler.kernelProcess
     if not kpid then return end
 
     table_[kpid] = {
         ppid = "bootloader",
         cmd = "kernel",
-        pgid = process.GROUP.SYS,
+        uid = KERNEL_UID,
+        gid = process.GID.SVC,
         children = {},
         onOrphaned = nil,
-        spawnedAt = scheduler().info(kpid) and scheduler().info(kpid).spawnedAt or 0,
+        spawnedAt = scheduler.info(kpid) and scheduler.info(kpid).spawnedAt or 0,
     }
-    groups[process.GROUP.SYS] = groups[process.GROUP.SYS] or {}
-    groups[process.GROUP.SYS][kpid] = true
+
+    groups[KERNEL_UID] = groups[KERNEL_UID] or {}
+    groups[KERNEL_UID][process.GID.SVC] = groups[KERNEL_UID][process.GID.SVC] or {}
+    groups[KERNEL_UID][process.GID.SVC][kpid] = true
 
     kernelRegistered = true
 end
 
--- Makes sure its a sane PGID. no, you cannot set it to -1
-local function normalizeGroup(gid, reserved)
-    if type(gid) ~= "number" then return process.GROUP.SYS end
-    if gid == process.GROUP.SYS then return process.GROUP.SYS end
-    if SYSRESV[gid] then return reserved and gid or process.GROUP.SYS end
-    if gid < 1 then return process.GROUP.SYS end
-    if gid > MAX_UNPRIV_GROUP then return process.GROUP.SYS end
-    return gid
+-- Makes sure its a sane GID
+local function normalizeGid(gid)
+    if type(gid) ~= "number" then return nil end
+    if GIDSET[gid] then return gid end
+    return nil
 end
 
-local function addToGroup(pid, gid)
-    groups[gid] = groups[gid] or {}
-    groups[gid][pid] = true
+local function normalizeUid(uid)
+    if type(uid) ~= "number" then return nil end
+    if uid < 0 or uid % 1 ~= 0 then return nil end
+    return uid
 end
 
-local function removeFromGroup(pid, gid)
-    if groups[gid] then
-        groups[gid][pid] = nil
+local function groupTree(uid, gid)
+    groups[uid] = groups[uid] or {}
+    groups[uid][gid] = groups[uid][gid] or {}
+    return groups[uid][gid]
+end
+
+local function addToGroup(pid, uid, gid)
+    groupTree(uid, gid)[pid] = true
+end
+
+local function removeFromGroup(pid, uid, gid)
+    local u = groups[uid]
+    if u and u[gid] then
+        u[gid][pid] = nil
     end
 end
 
@@ -173,7 +137,7 @@ local function reparentToKernel(pid)
     local entry = table_[pid]
     if not entry then return end
 
-    local kpid = scheduler().kernelProcess
+    local kpid = scheduler.kernelProcess
     isKernel()
 
     if entry.onOrphaned then
@@ -207,67 +171,90 @@ local function onProcessDeath(pid)
         end
     end
 
-    if entry.pgid then
-        removeFromGroup(pid, entry.pgid)
-    end
+    removeFromGroup(pid, entry.uid, entry.gid)
 end
 
--- Parent? Maybe
---[[ It can have a table with:
+--[[ spawn opts:
     label
     onExit function
     ppid, parent process id, or set to false to be kernel owned
-    onOrphaned functions
-    pgid, see pgid for options
+    uid, defaults to self or kernel
+    gid, one of process.GID. inherits from parent if same uid,
+        else SVC for uid 0 and USER for everyone else
+    onOrphaned function
 --]]
 function process.spawn(fn, opts)
     checkArg(1, fn, "function")
     checkArg(2, opts, "table", "nil")
     opts = opts or {}
 
-    local selfPid = process.self()
-    local hadActiveParent = (opts.ppid == nil) and (selfPid ~= nil)
+    local caller = scheduler.activeThread()
+    --local hadActiveParent = (opts.ppid == nil) and (caller ~= nil)
 
     local ppid = opts.ppid
     if ppid == nil then
-        ppid = selfPid
+        ppid = caller
     elseif ppid == false then
         ppid = nil
     end
 
     if ppid == nil then
         isKernel()
-        ppid = scheduler().kernelProcess
+        ppid = scheduler.kernelProcess
     end
 
-    -- Look at top for rules for this once I write them
-    local pgid
-    if opts.pgid ~= nil then
-        pgid = normalizeGroup(opts.pgid, opts.reserved)
-    elseif hadActiveParent then
-        local parentEntry = table_[ppid]
-        pgid = (parentEntry and parentEntry.pgid) or DEFAULT_GROUP
+    local parentEntry = ppid and table_[ppid] or nil
+
+    -- Get from the guy who does this, or its kernel. Or set.
+    local uid
+    if opts.uid ~= nil then
+        uid = normalizeUid(opts.uid)
+        if not uid then
+            error("process.spawn: invalid uid", 2)
+        end
+    elseif caller and table_[caller] then
+        uid = table_[caller].uid
     else
-        pgid = DEFAULT_GROUP
+        uid = KERNEL_UID
+    end
+
+    -- Inherits GID from parent! Or SVC if kernel does it
+    local gid
+    if opts.gid ~= nil then
+        gid = normalizeGid(opts.gid)
+        if not gid then
+            error("process.spawn: invalid gid (see process.GID)", 2)
+        end
+    elseif parentEntry and parentEntry.uid == uid then
+        gid = parentEntry.gid or DEFAULT_GID
+    elseif caller and table_[caller] and table_[caller].uid == uid then
+        gid = table_[caller].gid or DEFAULT_GID
+    else
+        gid = (uid == KERNEL_UID) and process.GID.SVC or DEFAULT_GID
+    end
+
+    if uid == KERNEL_UID then
+        gid = process.GID.SVC
     end
 
     local pid -- I fixed it I think
-    pid = scheduler().spawn(fn, function(success, reason, ...)
+    pid = scheduler.spawn(fn, function(success, reason, ...)
         onProcessDeath(pid)
         if opts.onExit then
             opts.onExit(success, reason, ...)
         end
-        -- Scheduler forgot it so did we 
+        -- Scheduler forgot it so did we
         table_[pid] = nil
     end, opts.label)
 
     table_[pid] = {
         ppid = ppid,
-        pgid = pgid,
-        cmd = opts.label or "?",
+        uid = uid,
+        gid = gid,
+        cmd = opts.cmd or opts.label or "?",
         children = {},
         onOrphaned = opts.onOrphaned,
-        spawnedAt = scheduler().info(pid) and scheduler().info(pid).spawnedAt or 0,
+        spawnedAt = scheduler.info(pid) and scheduler.info(pid).spawnedAt or 0,
     }
 
     if ppid and table_[ppid] then
@@ -275,14 +262,21 @@ function process.spawn(fn, opts)
         table_[ppid].children[pid] = true
     end
 
-    addToGroup(pid, pgid)
+    addToGroup(pid, uid, gid)
 
     return pid
 end
 
--- PID of itself
+-- Actually gives useful info about self
 function process.self()
-    return scheduler().activeThread()
+    local pid = scheduler.activeThread()
+    if not pid then return nil end
+    return process.get(pid)
+end
+
+-- if you are lazy
+function process.activeThread()
+    return scheduler.activeThread()
 end
 
 function process.exists(pid)
@@ -297,35 +291,31 @@ function process.get(pid)
     local own = table_[pid]
     if not own then return nil end
 
-    local info = scheduler().info(pid)
-    if not info then
-        -- scheduler forgot about it before we did somehow, yes this really happened during testing
-        return {
-            pid = pid,
-            ppid = own.ppid,
-            pgid = own.pgid,
-            cmd = own.cmd,
-            spawnedAt = own.spawnedAt,
-            protected = isKernelPid(pid),
-        }
-    end
-
-    return {
+    local info = scheduler.info(pid)
+    local base = {
         pid = pid,
         ppid = own.ppid,
-        pgid = own.pgid,
+        uid = own.uid,
+        gid = own.gid,
         cmd = own.cmd,
-        label = info.label,
-        status = info.status,
-        waiting = info.waiting,
-        sleeping = info.sleeping,
-        cancelled = info.cancelled,
-        stopped = info.stopped,
-        spawnedAt = info.spawnedAt,
-        age = info.age,
+        spawnedAt = own.spawnedAt,
         protected = isKernelPid(pid),
         ctty = own.ctty,
     }
+
+    if not info then
+        -- scheduler forgot about it before we did somehow, yes this really happened during testing
+        return base
+    end
+
+    base.label = info.label
+    base.status = info.status
+    base.waiting = info.waiting
+    base.sleeping = info.sleeping
+    base.cancelled = info.cancelled
+    base.stopped = info.stopped
+    base.age = info.age
+    return base
 end
 
 -- List PIDs
@@ -342,8 +332,8 @@ end
 -- Scheduler forgets it
 local function forget(pid)
     local entry = table_[pid]
-    if entry and entry.pgid then
-        removeFromGroup(pid, entry.pgid)
+    if entry then
+        removeFromGroup(pid, entry.uid, entry.gid)
     end
     table_[pid] = nil
 end
@@ -370,22 +360,64 @@ function process.parent(pid)
     isKernel()
     local entry = table_[pid]
     if not entry then return nil end
-    return entry.ppid or scheduler().kernelProcess
+    return entry.ppid or scheduler.kernelProcess
+end
+
+-- UID stuff
+function process.getUID(pid)
+    isKernel()
+    local entry = table_[pid]
+    return entry and entry.uid or nil
+end
+
+-- Moves a PID to a UID
+function process.setUID(pid, uid)
+    if isKernelPid(pid) then return false end
+
+    local entry = table_[pid]
+    if not entry then return false end
+
+    local newUid = normalizeUid(uid)
+    if not newUid then return false, "invalid uid" end
+
+    if newUid == entry.uid then return true, newUid end
+
+    removeFromGroup(pid, entry.uid, entry.gid)
+    entry.uid = newUid
+
+    -- Lol you cannot go to kernel's background
+    if newUid == KERNEL_UID then
+        entry.gid = process.GID.SVC
+    elseif entry.gid == process.GID.SVC then
+        -- a SVC process losing its privilege drops to USER
+        entry.gid = DEFAULT_GID
+    end
+    addToGroup(pid, entry.uid, entry.gid)
+
+    return true, entry.gid
 end
 
 -- Groups
 
--- I wonder what this does
+-- Just the gid
 function process.getGroup(pid)
     isKernel()
     local entry = table_[pid]
-    return entry and entry.pgid or nil
+    return entry and entry.gid or nil
 end
 
--- Members
-function process.groupMembers(gid)
+function process.getGroups(pid)
     isKernel()
-    local g = groups[gid]
+    local entry = table_[pid]
+    if not entry then return nil end
+    return entry.uid, entry.gid
+end
+
+-- Members of a (uid, gid) group
+function process.groupMembers(uid, gid)
+    isKernel()
+    local u = groups[uid]
+    local g = u and u[gid]
     if not g then return {} end
 
     local out = {}
@@ -397,24 +429,25 @@ function process.groupMembers(gid)
     return out
 end
 
--- Does grid stuff
+-- Does gid stuff
 function process.setGroup(pid, gid)
     if isKernelPid(pid) then return false end
     local entry = table_[pid]
     if not entry then return false end
 
-    local newGid = normalizeGroup(gid)
+    local newGid = normalizeGid(gid)
+    if not newGid then return false, "invalid gid" end
+    -- uid 0 stays in SVC
+    if entry.uid == KERNEL_UID then newGid = process.GID.SVC end
 
-    if entry.pgid then
-        removeFromGroup(pid, entry.pgid)
-    end
-    entry.pgid = newGid
-    addToGroup(pid, newGid)
+    removeFromGroup(pid, entry.uid, entry.gid)
+    entry.gid = newGid
+    addToGroup(pid, entry.uid, newGid)
 
     return true, newGid
 end
 
--- Custom group ids
+-- Custom groups. Why seperated? To test out negative shenanigans, thats it. Useless for general user
 function process.setGroupPriv(pid, gid)
     if isKernelPid(pid) then return false end
 
@@ -422,25 +455,22 @@ function process.setGroupPriv(pid, gid)
     if not entry then return false end
 
     checkArg(2, gid, "number")
-    if gid < 1 then return false, "invalid gid" end
-    if SYSRESV[gid] then return false, "gid reserved" end
+    if gid <= MAX_UNPRIV_GID then return false, "gid reserved" end
 
-    if entry.pgid then
-        removeFromGroup(pid, entry.pgid)
-    end
-    entry.pgid = gid
-    addToGroup(pid, gid)
+    removeFromGroup(pid, entry.uid, entry.gid)
+    entry.gid = gid
+    addToGroup(pid, entry.uid, gid)
 
     return true, gid
 end
 
--- Signal every member
-function process.signalGroup(gid, sig)
+-- Signal every member of a (uid, gid)
+function process.signalGroup(uid, gid, sig)
     isKernel()
-    if gid == process.GROUP.SYS then return 0 end -- Stop trying to kill the kernel, for loop
+    if uid == KERNEL_UID and gid == process.GID.SVC then return 0 end -- Stop trying to kill the kernel!
 
     local count = 0
-    for pid in pairs(groups[gid] or {}) do
+    for pid in pairs(groupTree(uid, gid)) do
         if table_[pid] and not isKernelPid(pid) then
             process.signal(pid, sig)
             count = count + 1
@@ -449,10 +479,15 @@ function process.signalGroup(gid, sig)
 
     if sig == process.SIG.KILL then
         -- Who did we try to kill?
-        pendingGroupKill[gid] = pendingGroupKill[gid] or {}
-        for pid in pairs(groups[gid] or {}) do
+        if not pendingGroupKill[uid] then pendingGroupKill[uid] = {} end
+        local pending = pendingGroupKill[uid][gid]
+        if not pending then
+            pending = {}
+            pendingGroupKill[uid][gid] = pending
+        end
+        for pid in pairs(groups[uid][gid] or {}) do
             if table_[pid] and not isKernelPid(pid) then
-                pendingGroupKill[gid][pid] = true
+                pending[pid] = true
             end
         end
     end
@@ -461,16 +496,21 @@ function process.signalGroup(gid, sig)
 end
 
 -- Kill every member without asking
-function process.killGroup(gid)
+function process.killGroup(uid, gid)
     isKernel()
-    if gid == process.GROUP.SYS then return 0 end
+    if uid == KERNEL_UID and gid == process.GID.SVC then return 0 end
 
-    pendingGroupKill[gid] = pendingGroupKill[gid] or {}
+    if not pendingGroupKill[uid] then pendingGroupKill[uid] = {} end
+    local pending = pendingGroupKill[uid][gid]
+    if not pending then
+        pending = {}
+        pendingGroupKill[uid][gid] = pending
+    end
 
     local count = 0
-    for pid in pairs(groups[gid] or {}) do
+    for pid in pairs(groups[uid] and groups[uid][gid] or {}) do
         if not isKernelPid(pid) then
-            pendingGroupKill[gid][pid] = true
+            pending[pid] = true
             if process.kill(pid) then
                 count = count + 1
             end
@@ -481,44 +521,45 @@ function process.killGroup(gid)
 end
 
 -- MISM, it can happen at a weird time of course
-function process.reapGroup(gid)
+function process.reapGroup(uid, gid)
     isKernel()
-    local pending = pendingGroupKill[gid]
+    local pending = pendingGroupKill[uid] and pendingGroupKill[uid][gid]
     if not pending then return {} end
 
     local survivors = {}
     for pid in pairs(pending) do
-        if table_[pid] and table_[pid].pgid == gid then
+        local entry = table_[pid]
+        if entry and entry.uid == uid and entry.gid == gid then
             -- It refused to die
-            process.setGroup(pid, process.GROUP.MISM)
+            process.setGroup(pid, process.GID.MISM)
             survivors[#survivors + 1] = pid
         end
     end
 
-    pendingGroupKill[gid] = nil
+    pendingGroupKill[uid][gid] = nil
     return survivors
 end
 
 -- Exit the active process from inside
 function process.exit(code)
-    if isKernelPid(process.self()) then return false end
-    return scheduler().exit(code)
+    if isKernelPid(scheduler.activeThread()) then return false end
+    return scheduler.exit(code)
 end
 
 function process.kill(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().kill(pid)
+    return scheduler.kill(pid)
 end
 
 function process.killAll(exceptPid)
     isKernel()
 
-    local kpid = scheduler().kernelProcess
+    local kpid = scheduler.kernelProcess
     local except = exceptPid
     if except == nil then except = kpid end
 
     -- Reparent all at once
-    scheduler().killAll(except)
+    scheduler.killAll(except)
 
     -- I hope this wont be reachable
     for pid in pairs(table_) do
@@ -531,92 +572,91 @@ end
 -- Ask nicely "please die"
 function process.cancel(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().cancel(pid)
+    return scheduler.cancel(pid)
 end
 
 function process.cancelAll()
     isKernel()
 
-    local kpid = scheduler().kernelProcess
+    local kpid = scheduler.kernelProcess
     for pid in pairs(table_) do
         if pid ~= kpid then
-            scheduler().cancel(pid)
+            scheduler.cancel(pid)
         end
     end
 end
 
 function process.isCancelled(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().isCancelled(pid)
+    return scheduler.isCancelled(pid)
 end
 
 -- Signal stuff
 
 function process.signal(pid, sig)
     if isKernelPid(pid) then return false end
-    return scheduler().signal(pid, sig)
+    return scheduler.signal(pid, sig)
 end
 
 function process.signalAll(sig)
     isKernel()
 
-    local kpid = scheduler().kernelProcess
+    local kpid = scheduler.kernelProcess
     for pid in pairs(table_) do
         if pid ~= kpid then
-            scheduler().signal(pid, sig)
+            scheduler.signal(pid, sig)
         end
     end
 end
 
 function process.pendingSignal(pid)
     if isKernelPid(pid) then return nil end
-    return scheduler().pendingSignal(pid)
+    return scheduler.pendingSignal(pid)
 end
 
 function process.isSignal(...)
-    return scheduler().isSignal(...)
+    return scheduler.isSignal(...)
 end
 
 -- Yields an extra tick! Exists to keep signals arriving
 function process.yield()
     -- Okay fine one more tick
-    scheduler().yield()
+    scheduler.yield()
     return true
 end
 
 -- ^Z / fg
 function process.stop(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().stop(pid)
+    return scheduler.stop(pid)
 end
 
 function process.cont(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().cont(pid)
+    return scheduler.cont(pid)
 end
 
 function process.isStopped(pid)
     if isKernelPid(pid) then return false end
-    return scheduler().isStopped(pid)
+    return scheduler.isStopped(pid)
 end
 
 -- Other
 
 function process.sleep(seconds)
-    return scheduler().sleep(seconds)
+    return scheduler.sleep(seconds)
 end
 
 function process.waitForInput()    -- Used alot less
-    return scheduler().waitForInput()
+    return scheduler.waitForInput()
 end
 
 -- Wake a process that is blocked
 function process.send(pid, value)
-    return scheduler().sendData(pid, value)
+    return scheduler.sendData(pid, value)
 end
 
 process.sendData = process.send
-process.activeThread = process.self
 
 -- now the i/o side
 
@@ -658,7 +698,7 @@ function process.destroy(pid)
 end
 
 local function currentIO()
-    local pid = process.self()
+    local pid = scheduler.activeThread()
     if not pid then
         error("process: must be used from within a running process", 2)
     end

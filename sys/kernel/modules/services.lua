@@ -251,7 +251,7 @@ function services.start(name, delay)
     end, {
         label = e.cfg.label,
         ppid = false, -- kernel
-        pgid = process.GROUP.SVC,
+        pgid = process.GID.SVC,
         reserved = true,
         onExit = function(success, reason)
             exited(e, pid, success, reason)

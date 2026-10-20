@@ -57,7 +57,7 @@ local function scanHardware()
 end
 
 -- This is hilariously broken, but I may(?) add a hotplug thing for spawning or removing shells when they can?
--- ...but that would need a login shell and like just no not right now
+-- ...but that would need a login shell and like just no not right now. Whats that? login shell exists? Still no.
 event.listen("component_added", function(_, addr, kind)
     if kind == "screen" then
         for gpu_addr in component.list("gpu", true) do
@@ -259,5 +259,6 @@ function console.getInfo()
 end
 
 scanHardware()
+polaris.analytics.addEvent("console")
 
 return console

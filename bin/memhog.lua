@@ -14,14 +14,14 @@ for i = 1, #args do
         target = args[i]
     else
         io.stderr:write("Usage: memhog [-v] <bytes|max> [-v]\n")
-        process.exit(1)
+        os.exit(1)
         return
     end
 end
 
 if target == nil then
     io.stderr:write("Usage: memhog [-v] <bytes|max> [-v]\n")
-    process.exit(1)
+    os.exit(1)
     return
 end
 
@@ -32,7 +32,7 @@ if not maxMode then
 
     if not target or target < 0 then
         io.stderr:write("Expected a non-negative byte count or 'max'\n")
-        process.exit(1)
+        os.exit(1)
         return
     end
 
@@ -66,7 +66,7 @@ local function estimateChunk(count)
 end
 
 if not maxMode and target == 0 then
-    process.exit(0)
+    os.exit(0)
     return
 end
 
@@ -95,7 +95,7 @@ while maxMode or allocated < target do
             io.stderr:write("Error: " .. tostring(result) .. "\n")
         end
 
-        process.exit(0)
+        os.exit(0)
         return
     end
 
@@ -103,5 +103,5 @@ while maxMode or allocated < target do
     allocated = allocated + estimateChunk(count)
 end
 
-process.exit(0)
+os.exit(0)
 return

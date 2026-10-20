@@ -39,7 +39,7 @@ do
         for k, v in pairs(opts) do wrapped[k] = v end
 
         -- Spawned in kernel so gets a modified _G
-        local parentEnv = process.self() and polaris.env.current() or polaris.env.new()
+        local parentEnv = polaris.env.current() or polaris.env.new()
 
         local pid
         wrapped.onExit = function(success, reason, ...)

@@ -1,6 +1,7 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
-package.path = "/lib/?.lua;/lib/?/init.lua;/lib/?/?.lua;/usr/lib/?.lua;/usr/lib/?/init.lua;/usr/lib/?/?.lua;/home/lib/?.lua;/home/lib/?/init.lua;/home/lib/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;/sys/kernel/modules/?.lua"
+package.path =
+"/lib/?.lua;/lib/?/init.lua;/lib/?/?.lua;/usr/lib/?.lua;/usr/lib/?/init.lua;/usr/lib/?/?.lua;/home/lib/?.lua;/home/lib/?/init.lua;/home/lib/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;/sys/kernel/modules/?.lua"
 
 local event_internals = require("event_internals")
 local component = require("component")
@@ -15,10 +16,10 @@ _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
 polaris.analytics = { boot = {} }
-local debug = polaris.config["debug"]
+local debugMode = polaris.config["debug"]
 
 status(polaris.version.kernel .. ": kinit exec, setting up kernel")
-if debug then
+if debugMode then
     _G.status = nil
 end
 
@@ -30,7 +31,7 @@ polaris.analytics.addEvent("kinit_start")
 
 -- This is now just a boot gpu
 polaris.gpu = gpu
-if debug ~= true then
+if debugMode ~= true then
     _G.gpu = nil
 end
 
@@ -55,11 +56,11 @@ polaris.process = require("process")
 --- Logging
 polaris.log = require("log")
 local function log(...)
-    if status == true and debug == true then status(...) end
+    if status == true and debugMode == true then status(...) end
     polaris.log(...)
 end
 
-if debug == true then function _G.klog(...) log(...) end end
+if debugMode == true then function _G.klog(...) log(...) end end
 
 log("log initialized for " .. tostring(polaris.version.kernel))
 log("Registered base modules: buffer, io, process, config, scheduler, log")
@@ -98,6 +99,37 @@ end
 -- Service time
 polaris.services = require("services")
 log("Registered module: services")
+
+polaris.panic = function()
+    local w, h = polaris.gpu.getResolution()
+    polaris.gpu.fill(1, 1, w, h, " ")
+
+    local y = 1
+    local w, h = 0, 0
+    
+    local function status(msg)
+        msg = tostring(msg)
+
+        polaris.gpu.set(1, y, msg)
+
+        if y == h then
+            polaris.gpu.copy(1, 2, w, h - 1, 0, -1)
+            polaris.gpu.fill(1, h, w, 1, " ")
+        else
+            y = y + 1
+        end
+    end
+
+    log("panic()")
+    log(debug.traceback())
+    polaris.scheduler.deinit(event_internals, polaris.scheduler.handler)
+    for line in tostring(polaris.log):gmatch("([^\n]*)\n") do
+        status(line)
+    end
+    while true do
+        computer.pullSignal(0)
+    end
+end
 
 polaris.analytics.addEvent("kinit_end")
 return ("Polaris " .. polaris.version.kernel .. " loaded")

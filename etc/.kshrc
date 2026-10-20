@@ -1,7 +1,7 @@
 # Sets up some stuff
 export SHELL=/bin/ksh.lua
 export TERM=polaris-truecolor
-export HOME=/home/root
-export VERSION=0.3
+export VERSION=0.4
+alias id='whoami -i'
 lua /etc/motd.lua
-cd /home/root
+cd /home/$USER
