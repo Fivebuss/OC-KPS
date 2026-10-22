@@ -8,7 +8,7 @@ local text = {}
 text.internal = {}
 
 -- Shell syntax
--- Added my own extras: Backgrounding and redirection
+-- Added my own extras: Backgrounding and redirection, subshell stuff
 
 text.syntax = {
     "&%d+>>", -- &N>>
@@ -28,7 +28,11 @@ text.syntax = {
     "&",      -- background
     ";",      -- command separator
     "||",     -- ||
-    "|"       -- |
+    "|",      -- |
+
+    "%$%(",   -- $(  substitution
+    "%(",     -- (   subshell
+    "%)"      -- )   end subshell
 }
 
 -- Trim whitespace from both ends of a string
@@ -90,7 +94,7 @@ function text.internal.tokenize(value, options)
     local words, reason = text.internal.words(value, options)
 
     local splitter = text.escapeMagic(
-        custom and table.concat(delimiters) or "<>|;&"
+        custom and table.concat(delimiters) or "<>|;&()"
     )
 
     if type(words) ~= "table" or

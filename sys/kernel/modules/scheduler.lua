@@ -258,8 +258,6 @@ function scheduler.signal(cid, sig, ...)
             t.resumeArgs = nil
         end
 
-        t.hasResume = false
-        t.resumeVal = nil
     end
     return true
 end
@@ -723,6 +721,10 @@ local function tick(...)
                         if inputHas(t) then
                             t.hasResume = true
                             t.resumeVal = inputShift(t)
+                            t.waiting = false
+                            t.wakeAt = nil
+                        elseif t.hasResume then
+                            -- Fix tick, this broke backgrounding
                             t.waiting = false
                             t.wakeAt = nil
                         else

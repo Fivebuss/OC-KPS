@@ -12,14 +12,6 @@ env.set(pid, e):            modifies a pid's _ENV
 env.destroy(pid):           gets rid of a env thing
 env.current():              the current one when used inside a process
 
--- Memory note:
--- Previously env.new() did a full pairs() copy of _G into every new env table,
--- meaning every spawned process paid sizeof(_G) in table entries up front.
--- Now child envs inherit globals through __index and only store keys they
--- actually write, so a freshly spawned process costs nearly nothing.
--- package and package.loaded are shared references (same as before, intentional).
--- env vars (PATH, PWD etc) are still deep-copied so children get their own copy.
-
 --]]
 
 local env = {}
