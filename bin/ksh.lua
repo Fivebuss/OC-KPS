@@ -31,21 +31,31 @@ tty.disabled.Z = true
 --polaris.config["tty.profile"] = 7
 
 -- Pipeline stuff
-local function ttyOutPassthrough()
+local function readerPassthrough(reader)
     return {
-        write = function(_, ...) return tty:write(...) end,
-        -- newline handling
-        flush = function(_) return tty:flush() end,
+        read = function(_, ...) return reader:read(...) end,
+        readLine = function(_, ...) return reader:readLine(...) end,
         close = function() end,
     }
 end
 
-local function ttyInPassthrough()
+local function writerPassthrough(writer)
     return {
-        read = function(_, ...) return tty.reader:read(...) end,
-        readLine = function(_, ...) return tty.reader:readLine(...) end,
+        write = function(_, ...) return writer:write(...) end,
+        flush = function(_)
+            if writer.flush then return writer:flush() end
+            return true
+        end,
         close = function() end,
     }
+end
+
+local function ttyOutPassthrough()
+    return writerPassthrough(tty)
+end
+
+local function ttyInPassthrough()
+    return readerPassthrough(tty.reader)
 end
 
 local shellPid
@@ -456,6 +466,7 @@ local function parseSegment(words, getenv)
     local i = 1
     local expandFail
     local subshell
+    local braceGroup
 
     local function dealWithToken(w)
         local isQuoted = (#w >= 2) and
@@ -480,15 +491,21 @@ local function parseSegment(words, getenv)
         return expandWildcard(expanded)
     end
 
-    -- (thing) is the one itself
+    -- (thing) and { list; }
     if type(words[1]) == "table" and words[1].subshell then
         subshell = words[1].subshell
+        i = 2
+    elseif type(words[1]) == "table" and words[1].braceGroup then
+        braceGroup = words[1].braceGroup
         i = 2
     end
 
     while i <= #words do
         local w = words[i]
         if type(w) == "table" then
+            if w.braceGroup then
+                return nil, "unexpected syntax after { list }"
+            end
             return nil, "syntax error near '('"
         elseif w == "<" then
             if type(words[i + 1]) ~= "string" then return nil, "missing filename after <" end
@@ -546,6 +563,9 @@ local function parseSegment(words, getenv)
                 if subshell then
                     return nil, "syntax error: unexpected word after ( list )"
                 end
+                if braceGroup then
+                    return nil, "unexpected word after { list }"
+                end
                 local expandedList = dealWithToken(w)
                 for _, item in ipairs(expandedList) do
                     args[#args + 1] = item
@@ -555,7 +575,7 @@ local function parseSegment(words, getenv)
         end
     end
 
-    if #args == 0 and not subshell then
+    if #args == 0 and not subshell and not braceGroup then
         return nil, "empty command"
     end
 
@@ -565,6 +585,10 @@ local function parseSegment(words, getenv)
 
     if subshell then
         return { subshell = subshell, redirects = redirects }
+    end
+
+    if braceGroup then
+        return { braceGroup = braceGroup, redirects = redirects }
     end
 
     return { args = args, redirects = redirects }
@@ -606,56 +630,73 @@ end
 
 -- Where should they go?
 local function ownStdin()
+    local shellIO = st().io
+    if shellIO and shellIO.stdin then
+        return readerPassthrough(shellIO.stdin)
+    end
     if inSubshell() then
-        local desc = process.input()
-        return {
-            read = function(_, ...) return desc:read(...) end,
-            readLine = function(_, ...) return desc:readLine(...) end,
-            close = function() end,
-        }
+        return readerPassthrough(process.input())
     end
     return ttyInPassthrough()
 end
 
 local function ownStdout()
+    local shellIO = st().io
+    if shellIO and shellIO.stdout then
+        return writerPassthrough(shellIO.stdout)
+    end
     if inSubshell() then
-        local desc = process.output()
-        return {
-            write = function(_, ...) return desc:write(...) end,
-            flush = function() return desc:flush() end,
-            close = function() end,
-        }
+        return writerPassthrough(process.output())
     end
     return ttyOutPassthrough()
 end
 
 local function ownStderr()
+    local shellIO = st().io
+    if shellIO and shellIO.stderr then
+        return writerPassthrough(shellIO.stderr)
+    end
     if inSubshell() then
-        local desc = process.error()
-        return {
-            write = function(_, ...) return desc:write(...) end,
-            flush = function() return desc:flush() end,
-            close = function() end,
-        }
+        return writerPassthrough(process.error())
     end
     return ttyOutPassthrough()
+end
+
+local function closeStreams(streams)
+    if not streams then return end
+    local seen = {}
+    for _, stream in ipairs(streams) do
+        if not seen[stream] then
+            seen[stream] = true
+            pcall(function()
+                if stream.close then stream:close() end
+            end)
+        end
+    end
 end
 
 -- Decides fd0/1/2 or tty
 local function makeStreams(inPipe, outPipe, redirects)
     local stdin, stdout, stderr
+    local owned = {}
+
+    local function fail(err)
+        closeStreams(owned)
+        return nil, nil, nil, err
+    end
 
     if redirects.stdinFile then
         local full = resolvePath(st().currPath, redirects.stdinFile)
         if not filesystem.exists(full) then
-            return nil, nil, nil, ioErr("no such file or directory", redirects.stdinFile)
+            return fail(ioErr("no such file or directory", redirects.stdinFile))
         end
         if filesystem.isDirectory(full) then
-            return nil, nil, nil, ioErr("is a directory", redirects.stdinFile)
+            return fail(ioErr("is a directory", redirects.stdinFile))
         end
         local stream, reason = io.newFileStream(full, "r")
-        if not stream then return nil, nil, nil, ioErr(reason, redirects.stdinFile) end
+        if not stream then return fail(ioErr(reason, redirects.stdinFile)) end
         stdin = stream
+        owned[#owned + 1] = stream
     else
         stdin = inPipe or ownStdin()
     end
@@ -663,11 +704,12 @@ local function makeStreams(inPipe, outPipe, redirects)
     if redirects.stdoutFile then
         local full = resolvePath(st().currPath, redirects.stdoutFile)
         if filesystem.isDirectory(full) then
-            return nil, nil, nil, ioErr("is a directory", redirects.stdoutFile)
+            return fail(ioErr("is a directory", redirects.stdoutFile))
         end
         local stream, reason = openForOutput(full, redirects.appendOut)
-        if not stream then return nil, nil, nil, ioErr(reason, redirects.stdoutFile) end
+        if not stream then return fail(ioErr(reason, redirects.stdoutFile)) end
         stdout = stream
+        owned[#owned + 1] = stream
     else
         stdout = outPipe or ownStdout()
     end
@@ -675,11 +717,12 @@ local function makeStreams(inPipe, outPipe, redirects)
     if redirects.stderrFile then
         local full = resolvePath(st().currPath, redirects.stderrFile)
         if filesystem.isDirectory(full) then
-            return nil, nil, nil, ioErr("is a directory", redirects.stderrFile)
+            return fail(ioErr("is a directory", redirects.stderrFile))
         end
         local stream, reason = openForOutput(full, redirects.appendStderr)
-        if not stream then return nil, nil, nil, ioErr(reason, redirects.stderrFile) end
+        if not stream then return fail(ioErr(reason, redirects.stderrFile)) end
         stderr = stream
+        owned[#owned + 1] = stream
     else
         stderr = ownStderr()
     end
@@ -690,7 +733,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         for dst, src in pairs(redirects.fdAliases) do
             local stream = resolved[src]
             if not stream then
-                return nil, nil, nil, "bad file descriptor: &" .. src
+                return fail("bad file descriptor: &" .. src)
             end
             if dst == 0 then
                 stdin = stream
@@ -702,7 +745,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         end
     end
 
-    return stdin, stdout, stderr
+    return stdin, stdout, stderr, nil, owned
 end
 
 -- Now with $PATH
@@ -788,7 +831,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
         end
     end
 
-    for segIdx = 1, segCount do
+    local function spawnSegment(segIdx)
         local seg = parsedSegments[segIdx]
         local inPipe = pipes[segIdx - 1]
         local outPipe = pipes[segIdx]
@@ -907,6 +950,49 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         tty:attach(pid)
                     end
                 end
+            end
+        end
+    end
+
+    for segIdx = 1, segCount do
+        if not parsedSegments[segIdx].braceGroup then
+            spawnSegment(segIdx)
+        end
+    end
+
+    for segIdx = 1, segCount do
+        local seg = parsedSegments[segIdx]
+        if seg.braceGroup then
+            local inPipe = pipes[segIdx - 1]
+            local outPipe = pipes[segIdx]
+            local stdin, stdout, stderr, err, owned = makeStreams(inPipe, outPipe, seg.redirects)
+
+            if err then
+                writeRed(process.error(), "ksh: " .. err, "\n")
+                segmentDone(segIdx, 1, inPipe, outPipe)
+            else
+                -- Oh boy. I/o
+                local savedIO = st().io
+                st().io = { stdin = stdin, stdout = stdout, stderr = stderr }
+
+                local ok, groupErr = xpcall(function()
+                    executeTokens(seg.braceGroup, getenv)
+                end, debug.traceback)
+
+                st().io = savedIO
+
+                if not ok then
+                    writeRed(process.error(), tostring(groupErr), "\n")
+                    st().lastExitCode = 1
+                end
+
+                pcall(function()
+                    if stdout.flush then stdout:flush() end
+                    if stderr.flush then stderr:flush() end
+                end)
+
+                closeStreams(owned)
+                segmentDone(segIdx, st().lastExitCode, inPipe, outPipe)
             end
         end
     end
@@ -1827,6 +1913,13 @@ end
 -- Runs a list of stuff
 executeTokens = function(rawTokens, getenv)
     local tokens, err = extractSubshells(rawTokens)
+    if not tokens then
+        writeRed(process.error(), "ksh: syntax error: " .. tostring(err), "\n")
+        st().lastExitCode = 2
+        return
+    end
+
+    tokens, err = text.internal.braceGroups(tokens)
     if not tokens then
         writeRed(process.error(), "ksh: syntax error: " .. tostring(err), "\n")
         st().lastExitCode = 2

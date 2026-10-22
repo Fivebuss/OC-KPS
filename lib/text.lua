@@ -388,6 +388,89 @@ function text.internal.normalize(words, omitQuotes)
     return norms
 end
 
+-- Deal with braces
+local function parseBraceList(tokens, i)
+    local inner = {}
+    local n = #tokens
+    local commandStart = true
+
+    while i <= n do
+        local tok = tokens[i]
+
+        if type(tok) == "string" and tok == "{" and commandStart then
+            local nested, nextIndex = parseBraceList(tokens, i + 1)
+            if not nested then
+                return nil, nextIndex
+            end
+            inner[#inner + 1] = { braceGroup = nested }
+            i = nextIndex
+            commandStart = false
+        elseif type(tok) == "string" and tok == "}" and commandStart then
+            local last = inner[#inner]
+            if not last then
+                return nil, "empty { } list"
+            end
+            if last ~= ";" and last ~= "&" then
+                return nil, "missing ';' before '}'"
+            end
+            return inner, i + 1
+        elseif type(tok) == "string" and
+            (tok == ";" or tok == "&" or tok == "&&" or tok == "||" or tok == "|") then
+            if commandStart then
+                return nil, "unexpected '" .. tok .. "'"
+            end
+            inner[#inner + 1] = tok
+            commandStart = true
+            i = i + 1
+        else
+            inner[#inner + 1] = tok
+            commandStart = false
+            i = i + 1
+        end
+    end
+
+    return nil, "missing '}'"
+end
+
+function text.internal.braceGroups(tokens)
+    checkArg(1, tokens, "table")
+
+    local out = {}
+    local i = 1
+    local n = #tokens
+    local commandStart = true
+
+    while i <= n do
+        local tok = tokens[i]
+
+        if type(tok) == "string" and tok == "{" and commandStart then
+            local inner, nextIndex = parseBraceList(tokens, i + 1)
+            if not inner then
+                return nil, nextIndex
+            end
+            out[#out + 1] = { braceGroup = inner }
+            commandStart = false
+            i = nextIndex
+        elseif type(tok) == "string" and tok == "}" and commandStart then
+            return nil, "unexpected '}'"
+        elseif type(tok) == "string" and
+            (tok == ";" or tok == "&" or tok == "&&" or tok == "||" or tok == "|") then
+            if commandStart then
+                return nil, "unexpected '" .. tok .. "'"
+            end
+            out[#out + 1] = tok
+            commandStart = true
+            i = i + 1
+        else
+            out[#out + 1] = tok
+            commandStart = false
+            i = i + 1
+        end
+    end
+
+    return out
+end
+
 -- Formatting
 
 -- Convert tabs into spaces.
