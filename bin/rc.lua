@@ -50,7 +50,7 @@ local function status(name)
 
         if s.proc then
             io.writeln(string.format("  process  pid %d, ppid %s, gid %s, up %s",
-                s.proc.pid, tostring(s.proc.ppid), tostring(s.proc.pgid), secs(s.proc.age)))
+                s.proc.pid, tostring(s.proc.ppid), tostring(s.proc.gid), secs(s.proc.age)))
         end
         io.writeln(string.format("  spawned  %s (%d start%s)", secs(s.startedAt), s.starts, s.starts == 1 and "" or "s"))
         if s.last then

@@ -131,7 +131,7 @@ local function metaOf(e)
         bits[#bits + 1] = "ppid=" .. tostring(e.ppid or "-")
         bits[#bits + 1] = "age=" .. fmtSeconds(e.age)
         bits[#bits + 1] = "spawned=" .. fmtSeconds(e.spawnedAt)
-        bits[#bits + 1] = "group=" .. groupName(e.pgid)
+        bits[#bits + 1] = "group=" .. groupName(e.gid)
     end
     if showIo then
         bits[#bits + 1] = "io=" .. fmtIo(e.pid)

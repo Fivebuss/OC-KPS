@@ -230,11 +230,7 @@ function process.spawn(fn, opts)
     elseif caller and table_[caller] and table_[caller].uid == uid then
         gid = table_[caller].gid or DEFAULT_GID
     else
-        gid = (uid == KERNEL_UID) and process.GID.SVC or DEFAULT_GID
-    end
-
-    if uid == KERNEL_UID then
-        gid = process.GID.SVC
+        gid = DEFAULT_GID
     end
 
     local pid -- I fixed it I think
@@ -385,13 +381,6 @@ function process.setUID(pid, uid)
     removeFromGroup(pid, entry.uid, entry.gid)
     entry.uid = newUid
 
-    -- Lol you cannot go to kernel's background
-    if newUid == KERNEL_UID then
-        entry.gid = process.GID.SVC
-    elseif entry.gid == process.GID.SVC then
-        -- a SVC process losing its privilege drops to USER
-        entry.gid = DEFAULT_GID
-    end
     addToGroup(pid, entry.uid, entry.gid)
 
     return true, entry.gid
@@ -437,8 +426,6 @@ function process.setGroup(pid, gid)
 
     local newGid = normalizeGid(gid)
     if not newGid then return false, "invalid gid" end
-    -- uid 0 stays in SVC
-    if entry.uid == KERNEL_UID then newGid = process.GID.SVC end
 
     removeFromGroup(pid, entry.uid, entry.gid)
     entry.gid = newGid
@@ -467,7 +454,6 @@ end
 -- Signal every member of a (uid, gid)
 function process.signalGroup(uid, gid, sig)
     isKernel()
-    if uid == KERNEL_UID and gid == process.GID.SVC then return 0 end -- Stop trying to kill the kernel!
 
     local count = 0
     for pid in pairs(groupTree(uid, gid)) do
@@ -498,7 +484,6 @@ end
 -- Kill every member without asking
 function process.killGroup(uid, gid)
     isKernel()
-    if uid == KERNEL_UID and gid == process.GID.SVC then return 0 end
 
     if not pendingGroupKill[uid] then pendingGroupKill[uid] = {} end
     local pending = pendingGroupKill[uid][gid]

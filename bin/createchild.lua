@@ -22,7 +22,7 @@ local child = function()
     local pid
     pid = process.spawn(code, {
         label = args[2],
-        pgid = process.GROUP.USER,
+        gid = process.GROUP.USER,
         onOrphaned = function()
             computer.beep(2000)
         end,

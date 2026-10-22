@@ -655,8 +655,9 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         process.exit(1)
                     end
                 end, {
+                    cmd = resolved,
                     label = seg.args[1],
-                    pgid = process.GID.FG,
+                    gid = process.GID.FG,
                     ppid = shellPid,
                     onExit = function(success, exitCode)
                         local code = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
@@ -1796,8 +1797,9 @@ local function shellLoop()
 end
 
 shellPid = process.spawn(shellLoop, {
+    cmd = "/bin/ksh.lua",
     label = "ksh",
-    pgid = process.GID.USER,
+    gid = process.GID.USER,
     onExit = function(success, reason)
         if polaris.config["debug"] == true then
             computer.beep(2000)

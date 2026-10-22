@@ -160,7 +160,7 @@ return {
         local opts = {
             label = "Child Test",
             ppid = process.self(),
-            pgid = process.GROUP.USERFG,
+            gid = process.GROUP.USERFG,
             onExit = function(success, err)
                 console:write("Child onExit\n")
             end,

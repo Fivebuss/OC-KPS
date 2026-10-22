@@ -16,14 +16,17 @@ local console = polaris.console.openTTY({
 local isDebug = false
 
 -- mmmm braille trick
-console:setCursorShape("underline")
+console:setCursorShape("invert")
 console.disabled.Z = true
+console.disabled.C = true
+console.disabled.D = true
 
 if not isDebug then
     console:clear()
 end
 
 local function launchKShell(user, uid)
+    local waiterPid = process.self().pid
     local shellPid
     polaris.analytics.addEvent("kshlaunch-" .. uid)
 
@@ -58,20 +61,32 @@ local function launchKShell(user, uid)
             error(loadErr, 0)
         end
 
-        return fn()
+        fn()
+
+        -- This is cursed
+        -- local pid = process.self().pid
+        -- while #process.children(pid) > 0 do
+        --     process.waitForInput()
+        -- end
+        process.waitForInput()
     end, {
-        cmd = "/bin/ksh.lua",
-        label = "ksh",
-        ppid = 1,
-        pgid = process.GID.FG,
+        cmd = "/bin/login.lua",
+        label = "logind-watchdog-" .. waiterPid,
+        ppid = waiterPid,
+        gid = process.GID.USER,
         uid = uid,
 
         onExit = function(success, exitCode)
             if not success then
                 status(exitCode)
             end
+
+            process.send(waiterPid, true)
         end,
     })
+
+    -- I forgot to just wait until ksh dies lmao
+    process.waitForInput()
 
     return shellPid
 end
@@ -111,12 +126,36 @@ local function loginLoop()
             local uid = users.lookup(line)
             --console:write("Found user id " .. uid)
 
-            launchKShell(line, uid)
             console:clear()
             console:write("Loading /bin/ksh.lua as UID " .. uid)
             console:flush()
             console:close()
-            return
+
+            launchKShell(line, uid)
+
+            -- I will just assume tty wont change lol
+            console = polaris.console.openTTY({
+                gpu   = gpu,
+                owner = process.self().pid,
+            })
+
+            console:setCursorShape("invert")
+            console.disabled.Z = true
+            console.disabled.C = true
+            console.disabled.D = true
+
+            process.create(process.self().pid, console.reader, console, console)
+
+            -- Own it
+            if console.attach then
+                console:attach(process.self().pid)
+            end
+
+            stdin = process.input()
+
+            -- And the login loop lives again
+            console:clear()
+            console:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
         end
     end
 end
@@ -125,7 +164,8 @@ end
 local loginShell
 loginShell = process.spawn(loginLoop, {
     cmd = "/bin/login.lua",
-    label = ("login_shell_" .. tostring(gpu)):sub(1, 15),
+    label = ("logind-" .. tostring(gpu)):sub(1, 10),
+    gid = process.GID.USER,
     onExit = function(success, reason)
         if not success then
             local trace = debug.traceback(reason)

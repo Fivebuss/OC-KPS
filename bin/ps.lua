@@ -158,7 +158,7 @@ if all then
         end
     else
         header = {
-            "CMD", "PID", "PPID", "UID", "GID", "LABEL",
+            "LABEL", "PID", "PPID", "UID", "GID", "CMD",
             "AGE", "SPAWNED", "S", "TTY",
         }
 
@@ -168,12 +168,12 @@ if all then
 
         rowFn = function(e)
             local row = {
-                cmdOrLabel(e),
+                e.label or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
                 tostring(e.uid or "-"),
-                tostring(e.gid or "-"),
-                e.label or "-",
+                gidName(e.gid),
+                e.cmd or "?",
                 fmtSeconds(e.age, false),
                 fmtSeconds(e.spawnedAt, false),
                 statusChar(e),
@@ -213,7 +213,7 @@ else
         end
     else
         header = {
-            "CMD", "PID", "PPID", "LABEL", "AGE", "S", "TTY",
+            "LABEL", "PID", "PPID", "CMD", "AGE", "S", "TTY",
         }
 
         if showIo then
@@ -222,10 +222,10 @@ else
 
         rowFn = function(e)
             local row = {
-                cmdOrLabel(e),
+                e.label or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
-                e.label or "-",
+                e.cmd or "?",
                 fmtSeconds(e.age, false),
                 statusChar(e),
                 fmtCtty(e),
