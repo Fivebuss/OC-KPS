@@ -520,6 +520,15 @@ local function wireInjections()
     ipv4.setLog(log)
     ipv4.setDebug(function(msg) debugLog(msg) end)
 
+    ipv4.setForward(function(msg)
+        sendIP({
+            src     = msg.src,
+            dst     = msg.dst,
+            proto   = msg.proto,
+            payload = msg.payload,
+        })
+    end)
+
     icmp.setSendIP(icmpSend)
     icmp.setNotify(icmpNotify)
     icmp.setLog(log)

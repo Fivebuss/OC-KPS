@@ -12,10 +12,13 @@ M.FLAG_MF = 4
 M.FLAG_DF = 2 -- Dont fragment please
 
 local localDeliver = nil
+local forwardFn = nil
 local logFn = nil
 local debugFn = nil
 
 function M.setLocalDeliver(fn) localDeliver = fn end
+
+function M.setForward(fn) forwardFn = fn end
 
 function M.setLog(fn) logFn = fn end
 
@@ -379,7 +382,16 @@ function M.receive(iface, data, now)
         end
     end
     if not allowed then
-        debug("drop: dst " .. (address.dotted(packet.dst) or "?") .. " is not ours; no forwarding")
+        if forwardFn and packet.ttl > 0 then
+            debug("forward: dst " .. (address.dotted(packet.dst) or "?"))
+            local msg = M.reassemble(packet, now)
+            if msg then
+                pcall(forwardFn, msg)
+            end
+        else
+            debug("drop: dst " .. (address.dotted(packet.dst) or "?") ..
+                (packet.ttl <= 0 and " (ttl expired)" or " (no forwarder)"))
+        end
         return false
     end
 

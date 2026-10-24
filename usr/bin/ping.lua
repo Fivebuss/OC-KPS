@@ -15,7 +15,7 @@ local function usage()
     io.writeln("usage: ping [-c count] [-W timeout] [-s size] <destination>")
 end
 
-local count, timeout, size = 4, 5, 56
+local count, timeout, size = 5, 5, 56
 local values = {}
 
 for opt, val in getopt(args, "c:W:s:h", { help = "h" }) do
