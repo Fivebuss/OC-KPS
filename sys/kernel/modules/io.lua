@@ -479,6 +479,7 @@ function pipeMt.__index:readLine()
             if self._size > 0 then
                 local rest = pipeTake(self, nil)
                 pipeWake(self, "_writerUid")
+                self._eofRecv = false
                 return rest
             end
             self._eofRecv = false

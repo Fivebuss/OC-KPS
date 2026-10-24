@@ -17,7 +17,6 @@ local function onAdded(_, address, ctype)
         polaris.log(tostring(ctype) .. " added: " .. tostring(address))
         local path = "/mnt/" .. address:sub(1, 3)
         filesystem.mount(address, path)
-        computer.beep(2000)
     end
 end
 

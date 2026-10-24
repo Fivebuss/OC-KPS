@@ -765,7 +765,7 @@ local function resolveCommand(name, getenv)
     -- Lookup by PATH
     local pathStr = lookupVar("PATH", getenv)
     if not pathStr or pathStr == "" then
-        pathStr = "/bin:/sbin"
+        pathStr = "/usr/bin:/bin:/sbin"
     end
 
     -- Keep looking
@@ -2361,7 +2361,7 @@ local function shellLoop()
     shellUid = process.self().uid
     env.setenv("PWD", st().currPath)
     if not env.getenv("PATH") then
-        env.setenv("PATH", "/bin:/sbin")
+        env.setenv("PATH", "/usr/bin:/bin:/sbin")
     end
 
     -- Non-interactive script execution

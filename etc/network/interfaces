@@ -1,0 +1,19 @@
+# /etc/network/interfaces
+#
+# auto <name>            bring <name> up when knetd starts
+# iface <name> inet static
+#     address <a.b.c.d>/<prefix>
+#     gateway <a.b.c.d>
+#     metric <n>
+#     mtu <n>
+#
+# Only "inet static" is supported. <name> may be eth<slot> or an exact modem
+# component UUID. lo is implicit and always up as 127.0.0.1/8
+
+auto eth0
+
+iface eth0 inet static
+    address 192.168.1.10/24
+    gateway 192.168.1.1
+    metric 100
+    mtu 8192

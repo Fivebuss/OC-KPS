@@ -436,7 +436,8 @@ function text.internal.braceGroups(tokens)
     checkArg(1, tokens, "table")
 
     local out = {}
-    local i = 1
+    local i
+    i = 1
     local n = #tokens
     local commandStart = true
 

@@ -1,6 +1,6 @@
 -- /bin/login.lua
 -- Multi-user time! yay
--- We can just ripoff initconsole lol
+-- We can just ripoff inittty lol
 
 local process = polaris.process
 local io = require("io")
@@ -8,7 +8,7 @@ local users = require("users")
 local filesystem = require("filesystem")
 local gpu = polaris.console._spawnGpu
 
-local console = polaris.console.openTTY({
+local tty = polaris.console.openTTY({
     gpu   = polaris.console._spawnGpu,
     owner = process.self() and process.self().pid,
 })
@@ -16,13 +16,13 @@ local console = polaris.console.openTTY({
 local isDebug = false
 
 -- mmmm braille trick
-console:setCursorShape("invert")
-console.disabled.Z = true
-console.disabled.C = true
-console.disabled.D = true
+tty:setCursorShape("invert")
+tty.disabled.Z = true
+tty.disabled.C = true
+tty.disabled.D = true
 
 if not isDebug then
-    console:clear()
+    tty:clear()
 end
 
 local function launchKShell(user, uid)
@@ -63,11 +63,6 @@ local function launchKShell(user, uid)
 
         fn()
 
-        -- This is cursed
-        -- local pid = process.self().pid
-        -- while #process.children(pid) > 0 do
-        --     process.waitForInput()
-        -- end
         process.waitForInput()
     end, {
         cmd = "/bin/login.lua",
@@ -78,7 +73,8 @@ local function launchKShell(user, uid)
 
         onExit = function(success, exitCode)
             if not success then
-                status(exitCode)
+                polaris.log(exitCode)
+                polaris.panic()
             end
 
             process.send(waiterPid, true)
@@ -92,20 +88,20 @@ local function launchKShell(user, uid)
 end
 
 local function loginLoop()
-    console:clear()
-    console:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
+    tty:clear()
+    tty:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
 
     local stdin = process.input()
 
     while true do
-        console:write("login: ")
-        console:flush()
+        tty:write("login: ")
+        tty:flush()
 
         local line = stdin:readLine()
         line = line:gsub("[\r\n]", "")
 
         if line == "" then
-            console:clear()
+            tty:clear()
         elseif line == "?proc" then
             local info = process.self()
             local keys = {}
@@ -117,45 +113,45 @@ local function loginLoop()
             table.sort(keys)
 
             for _, key in ipairs(keys) do
-                console:write(tostring(key), ": ", tostring(info[key]), "\n")
+                tty:write(tostring(key), ": ", tostring(info[key]), "\n")
             end
         elseif not users.exists(line) then
-            console:write("User '" .. line .. "' does not exist\n")
+            tty:write("User '" .. line .. "' does not exist\n")
         else
-            --console:write("Found user " .. line .. "!\n")
+            --tty:write("Found user " .. line .. "!\n")
             local uid = users.lookup(line)
-            --console:write("Found user id " .. uid)
+            --tty:write("Found user id " .. uid)
 
-            console:clear()
-            console:write("Loading /bin/ksh.lua as UID " .. uid)
-            console:flush()
-            console:close()
+            tty:clear()
+            tty:write("Loading /bin/ksh.lua as UID " .. uid)
+            tty:flush()
+            tty:close()
 
             launchKShell(line, uid)
 
             -- I will just assume tty wont change lol
-            console = polaris.console.openTTY({
+            tty = polaris.console.openTTY({
                 gpu   = gpu,
                 owner = process.self().pid,
             })
 
-            console:setCursorShape("invert")
-            console.disabled.Z = true
-            console.disabled.C = true
-            console.disabled.D = true
+            tty:setCursorShape("invert")
+            tty.disabled.Z = true
+            tty.disabled.C = true
+            tty.disabled.D = true
 
-            process.create(process.self().pid, console.reader, console, console)
+            process.create(process.self().pid, tty.reader, tty, tty)
 
             -- Own it
-            if console.attach then
-                console:attach(process.self().pid)
+            if tty.attach then
+                tty:attach(process.self().pid)
             end
 
             stdin = process.input()
 
             -- And the login loop lives again
-            console:clear()
-            console:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
+            tty:clear()
+            tty:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
         end
     end
 end
@@ -178,9 +174,9 @@ loginShell = process.spawn(loginLoop, {
 })
 
 -- stdin isnt used really
-process.create(loginShell, console.reader, console, console)
+process.create(loginShell, tty.reader, tty, tty)
 
--- Register this thread as the "owner" of the console
-if console.attach then
-    console:attach(loginShell)
+-- Register this thread as the "owner" of the tty
+if tty.attach then
+    tty:attach(loginShell)
 end

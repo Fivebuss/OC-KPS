@@ -53,7 +53,7 @@ polaris.scheduler.handler = polaris.scheduler.init(event_internals, interval)
 -- Process managemen for stdio and everything
 polaris.process = require("process")
 
---- Logging
+--Logging
 polaris.log = require("log")
 local function log(...)
     if status == true and debugMode == true then status(...) end
