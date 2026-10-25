@@ -1,4 +1,4 @@
--- /lib/network/admin.lua
+-- /usr/lib/network/admin.lua
 -- RPC to knetd and some cool stuff
 
 local const = require("network.const")

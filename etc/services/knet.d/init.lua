@@ -1,5 +1,5 @@
 -- /etc/services/privileged/knetd.d/init.lua
--- knetd, actual code is in lib/network/stack.lua
+-- knetd, actual code is in usr/lib/network/stack.lua
 
 local stack = require("network.stack")
 local svc = {}

@@ -1,4 +1,4 @@
--- /lib/network/socket/tcp.lua
+-- /usr/lib/network/socket/tcp.lua
 -- TCP time
 
 local const = require("network.const")

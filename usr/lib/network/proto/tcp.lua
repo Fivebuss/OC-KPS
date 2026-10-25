@@ -1,4 +1,4 @@
--- /lib/network/proto/tcp.lua
+-- /usr/lib/network/proto/tcp.lua
 -- TCP except not compliant lol. Thanks OSInet!
 --
 -- Thanks AI for --V

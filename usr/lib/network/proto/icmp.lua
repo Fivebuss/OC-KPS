@@ -1,4 +1,4 @@
--- /lib/network/proto/icmp.lua
+-- /usr/lib/network/proto/icmp.lua
 -- ICMP echo basically
 
 local const = require("network.const")

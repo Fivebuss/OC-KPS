@@ -1,4 +1,4 @@
--- /lib/network/proto/ethernet.lua
+-- /usr/lib/network/proto/ethernet.lua
 -- eth0
 -- No, wlo1 will not happen. Horrific spec...
 

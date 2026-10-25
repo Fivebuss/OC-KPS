@@ -1,4 +1,4 @@
--- /lib/network/proto/arp.lua
+-- /usr/lib/network/proto/arp.lua
 -- ARP cache. Yay
 
 local const = require("network.const")

@@ -1,4 +1,4 @@
--- /lib/network/const.lua
+-- /usr/lib/network/const.lua
 -- Daemon and libraries both use this
 
 local M               = {}

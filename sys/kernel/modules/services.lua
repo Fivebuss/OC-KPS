@@ -1,8 +1,6 @@
 -- /sys/kernel/modules/services.lua
 --[[
-Privileged services, yeah they run in kernel space. I will use it for minitel probably
-User ones maybe sometime later?
-/etc/services/privileged/<name>.d/*
+/etc/services/<name>.d/*
 
 Hey look! I did a thing. Services are like modules now
 start() is ran when the service is started
@@ -12,7 +10,7 @@ Use any arbitrary functions, usable via rc <name> <func> [args...]
 You cannot define 'restart' or 'status' as functions.
 
 Process stuff:
-GID is #3, SVC
+GID is #1, SVC
 PPID is 1, the kernel
 Uses types stream,custom,custom for i/o
 Shares the _ENV with kernel, and so things get copied downwards
@@ -33,7 +31,7 @@ local ring = require("ringbuffer")
 local process = polaris.process
 local kernelEnv = _G
 
-local ROOT = "/etc/services/privileged"
+local ROOT = "/etc/services"
 local DEFAULTS = { priority = 0, onExit = "stop", autostart = true, restartDelay = 1, stopTimeout = 5, resetLog = false }
 local RESERVED = { status = true, restart = true }
 

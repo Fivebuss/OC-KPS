@@ -1,4 +1,4 @@
--- /lib/network/socket/udp.lua
+-- /usr/lib/network/socket/udp.lua
 -- Hopefully works with process stuff
 
 local const = require("network.const")

@@ -1,4 +1,4 @@
--- /lib/network/ipc.lua
+-- /usr/lib/network/ipc.lua
 -- Like syscalls work
 
 local M = {}

@@ -1,4 +1,4 @@
--- /lib/network/wire.lua
+-- /usr/lib/network/wire.lua
 -- Big-endian byte packing/unpacking and checksum. What a mouthful. I just snatched it lmao
 
 local M = {}

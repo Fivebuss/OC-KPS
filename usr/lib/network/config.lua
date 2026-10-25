@@ -1,5 +1,5 @@
 --[[
-/lib/network/config.lua
+/usr/lib/network/config.lua
 deals with /etc/network/interfaces and /etc/network/knetd.cfg
 Thanks AI for this bigass comment block --V
 /etc/network/interfaces is like (subset):
@@ -15,7 +15,7 @@ up. "lo" is implicit in knetd; an explicit lo block overrides the implicity
 one. Interface names may be eth<slot> or an exact modem component UUID.
 Invalid values are collected in the result; the entry simply never goes up
 
-/etc/network/knetd.cfg holds simple key=value runtime options and defaults live in lib/network/const.lua.
+/etc/network/knetd.cfg holds simple key=value runtime options and defaults live in usr/lib/network/const.lua.
 --]]
 
 local M = {}

@@ -1,5 +1,5 @@
 --[[
-/lib/network/init.lua
+/usr/lib/network/init.lua
 The main network library stuff
 
 local network = require("network")

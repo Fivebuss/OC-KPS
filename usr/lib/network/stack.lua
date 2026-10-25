@@ -1,4 +1,4 @@
--- /lib/network/stack.lua
+-- /usr/lib/network/stack.lua
 -- The actual knetd code to be honest
 -- THIS IS ABHORRENTLY LONG
 
