@@ -8,7 +8,7 @@ local M       = {}
 
 local ifaces  = {}
 local byName  = {}
-local handler = nil    -- (iface, srcHw, etype, payload)
+local handler = nil -- (iface, srcHw, etype, payload)
 local mtuOverride
 
 function M.setHandler(fn)
@@ -37,14 +37,13 @@ local function computeMtu(iface)
     return const.DEFAULTS.mtu
 end
 
--- Linked cards cap by maxPacketSize instead of device capacity
+-- Linked cards cap by maxPacketSize
 local function computeTunnelMtu(iface)
     if mtuOverride and mtuOverride > 0 then
         return mtuOverride
     end
     local ok, maxSize = pcall(iface.modem.maxPacketSize)
     if ok and type(maxSize) == "number" and maxSize > 72 then
-        -- same headroom convention as modem capacity
         return maxSize - 72
     end
     return const.DEFAULTS.mtu
@@ -61,7 +60,7 @@ function M.add(data)
         mask = data.mask,
     }
 
-    -- Linked cards: no ports, no broadcast, the peer is implicit
+    -- Linked card is p2p
     if iface.modem.type == "tunnel" then
         iface.tunnel = true
         iface.mtu = computeTunnelMtu(iface)
@@ -132,7 +131,7 @@ function M.send(iface, dstHw, etype, payload)
     end
     local ok, reason
     if iface.tunnel then
-        -- point to point: no port, no dst. "broadcast" just hits the peer
+        -- p2p
         ok, reason = pcall(iface.modem.send, etype, payload)
     elseif dstHw == const.MAC_BROADCAST then
         ok, reason = pcall(iface.modem.broadcast, const.ETHER_PORT, etype, payload)

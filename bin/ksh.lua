@@ -69,9 +69,9 @@ local shellState = {
     aliases = {},
     currPath = "/",
     lastExitCode = 0,
-    fgBusy = false,    -- true while a foreground pipeline is actually going
+    fgBusy = false,       -- true while a foreground pipeline is actually going
     gid = process.GID.FG, -- No jobs yet.
-    asyncJobs = {},    -- wait
+    asyncJobs = {},       -- wait
 }
 
 local function st()
@@ -789,7 +789,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
     local segCount = #parsedSegments
     local pipes = {}
     for i = 1, segCount - 1 do
-        pipes[i] = io.newPipe(polaris.scheduler, 8192)
+        pipes[i] = io.newPipe(polaris.scheduler, 2048)
     end
 
     local results = {}
@@ -874,7 +874,8 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         local env = polaris.env.current()
                         env.console = makeConsole(spawnPwd)
                         env.args = argv(seg.args)
-                        env.ctty = tty -- current tty, I am too lazy to deal with /dev/tty* bs and this is far easier for me
+                        env.ctty =
+                        tty            -- current tty, I am too lazy to deal with /dev/tty* bs and this is far easier for me
                         env.setenv("PWD", spawnPwd)
                         if segIdx == 1 and tempEnvValues then
                             for name, value in pairs(tempEnvValues) do
@@ -1016,21 +1017,19 @@ end
 
 -- Deals with subshell stuff
 
--- Copies the shell's environment
+-- Metatable trick to save memory
 local function snapshotState(gid)
     local s = st()
     local copy = {
-        locals = {},
+        locals = setmetatable({}, { __index = s.locals }),
         scriptArgs = s.scriptArgs,
-        aliases = {},
+        aliases = setmetatable({}, { __index = s.aliases }),
         currPath = s.currPath,
         lastExitCode = s.lastExitCode,
         fgBusy = false,
         gid = gid or s.gid,
         asyncJobs = {},
     }
-    for k, v in pairs(s.locals) do copy.locals[k] = v end
-    for k, v in pairs(s.aliases) do copy.aliases[k] = v end
     return copy
 end
 
@@ -1095,7 +1094,7 @@ end
 
 -- Substitution stuff
 captureSubshell = function(tokens, getenv)
-    local pipe = io.newPipe(polaris.scheduler, 8192)
+    local pipe = io.newPipe(polaris.scheduler, 2048)
     local status = 0
     spawnSubshell(tokens, {
         stdout = pipe,
