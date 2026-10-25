@@ -43,11 +43,10 @@ local function debugLog(msg)
 end
 
 local computer = require("computer")
+local computer_uptime = computer.uptime
 
 local function now()
-    local ok, t = pcall(computer.uptime)
-    if ok and type(t) == "number" then return t end
-    return 0
+    return computer_uptime()
 end
 
 local function ifaceByHw(hw)
@@ -71,19 +70,25 @@ local function ethSlotNumber(name)
     return tonumber(name:match("^eth(%d+)$"))
 end
 
+local function lnkSlotNumber(name)
+    if type(name) ~= "string" then return nil end
+    return tonumber(name:match("^lnk(%d+)$"))
+end
+
 -- Automatically added hopefully
 local knownModems = {}
+local knownTunnels = {}
 
-local function modemAddresses()
+local function componentAddresses(ctype, known)
     local raw = {}
     pcall(function()
-        for addressStr, ctype in component.list() do
-            if ctype == "modem" then
-                knownModems[addressStr] = true
+        for addressStr, knownType in component.list() do
+            if knownType == ctype then
+                known[addressStr] = true
             end
         end
     end)
-    for addressStr in pairs(knownModems) do
+    for addressStr in pairs(known) do
         raw[#raw + 1] = addressStr
     end
     table.sort(raw)
@@ -96,6 +101,14 @@ local function modemAddresses()
         end
     end
     return out
+end
+
+local function modemAddresses()
+    return componentAddresses("modem", knownModems)
+end
+
+local function tunnelAddresses()
+    return componentAddresses("tunnel", knownTunnels)
 end
 
 -- Resolved name to address
@@ -112,6 +125,68 @@ local function resolveModemAddress(name)
     return addresses[slot + 1]
 end
 
+-- Same deal but for linked cards (lnkN or a raw tunnel uuid)
+local function resolveTunnelAddress(name)
+    local addresses = tunnelAddresses()
+    local slot = lnkSlotNumber(name)
+    if slot == nil then
+        for _, addressStr in ipairs(addresses) do
+            if addressStr == name then return addressStr end
+        end
+        return nil
+    end
+    return addresses[slot + 1]
+end
+
+-- Address + routes, shared by modems and linked cards
+local function provisionAddress(name, iface, entry)
+    -- MTU from config
+    if entry.mtu and entry.mtu > 0 then
+        iface.mtu = entry.mtu
+    end
+    -- address provision
+    iface.addr = nil
+    iface.prefix = nil
+    iface.mask = nil
+    if entry.address then
+        local addr, prefix = address.parseCIDR(entry.address)
+        if addr then
+            iface.addr = addr
+            iface.prefix = prefix
+            iface.mask = address.prefixToMask(prefix)
+        else
+            log(name .. ": bad address " .. tostring(entry.address) ..
+                "; interface stays down")
+        end
+    end
+
+    -- Subnet
+    if iface.addr and iface.mask then
+        local netDotted = address.dotted(address.networkOf(iface.addr, iface.mask))
+        ipv4.addRoute({
+            net = netDotted .. "/" .. tostring(iface.prefix),
+            gateway = nil,
+            metric = entry.metric,
+            iface = name,
+            ptp = iface.tunnel,
+        })
+        if entry.gateway then
+            local gw = address.parse(entry.gateway)
+            if gw then
+                ipv4.addRoute({
+                    net = "0.0.0.0/0",
+                    gateway = gw,
+                    metric = (entry.metric or 0) + 100,
+                    iface = name,
+                    ptp = iface.tunnel,
+                })
+            else
+                log(name .. ": bad gateway " .. tostring(entry.gateway))
+            end
+        end
+    end
+end
+
 -- Bring interfac up
 local function raise(name, entry, preferAddress)
     if ifaces[name] then
@@ -125,15 +200,19 @@ local function raise(name, entry, preferAddress)
 
     entry = entry or {}
 
-    local hw = preferAddress or resolveModemAddress(name)
+    -- lnk slots are linked cards, other names try modems then tunnels
+    local hw = preferAddress or resolveModemAddress(name) or resolveTunnelAddress(name)
     if hw == nil then
+        if lnkSlotNumber(name) then
+            return nil, "no linked card for interface " .. name
+        end
         return nil, "no modem for interface " .. name
     end
 
     local ok, err = pcall(function()
         local proxy = component.proxy(hw)
-        if proxy == nil or proxy.type ~= "modem" then
-            error("not a modem: " .. tostring(hw), 0)
+        if proxy == nil or (proxy.type ~= "modem" and proxy.type ~= "tunnel") then
+            error("not a network component: " .. tostring(hw), 0)
         end
         local iface, addErr = ethernet.add({
             name = name,
@@ -143,50 +222,8 @@ local function raise(name, entry, preferAddress)
         if iface == nil then
             error(tostring(addErr), 0)
         end
-        -- MTU from config
-        if entry.mtu and entry.mtu > 0 then
-            iface.mtu = entry.mtu
-        end
-        -- address provision
-        iface.addr = nil
-        iface.prefix = nil
-        iface.mask = nil
-        if entry.address then
-            local addr, prefix = address.parseCIDR(entry.address)
-            if addr then
-                iface.addr = addr
-                iface.prefix = prefix
-                iface.mask = address.prefixToMask(prefix)
-            else
-                log(name .. ": bad address " .. tostring(entry.address) ..
-                    "; interface stays down")
-            end
-        end
         ifaces[name] = iface
-
-        -- Subnet
-        if iface.addr and iface.mask then
-            local netDotted = address.dotted(address.networkOf(iface.addr, iface.mask))
-            ipv4.addRoute({
-                net = netDotted .. "/" .. tostring(iface.prefix),
-                gateway = nil,
-                metric = entry.metric,
-                iface = name,
-            })
-            if entry.gateway then
-                local gw = address.parse(entry.gateway)
-                if gw then
-                    ipv4.addRoute({
-                        net = "0.0.0.0/0",
-                        gateway = gw,
-                        metric = (entry.metric or 0) + 100,
-                        iface = name,
-                    })
-                else
-                    log(name .. ": bad gateway " .. tostring(entry.gateway))
-                end
-            end
-        end
+        provisionAddress(name, iface, entry)
     end)
 
     if not ok then
@@ -249,6 +286,9 @@ local function resolvePayload(item, src)
 end
 
 -- We can skip ALOT of time for lo
+local sendIP
+local udpNoSocket
+
 local function deliverLocal(src, dst, proto, payload)
     if proto == const.PROTOCOLS.UDP then
         local msg = udp.decodeDatagram(payload, src, dst)
@@ -258,6 +298,9 @@ local function deliverLocal(src, dst, proto, payload)
         end
         local sock = udp.findSocket(dst, src, msg.dport, msg.sport)
         if sock == nil then
+            if udpNoSocket then
+                pcall(udpNoSocket, src, dst, msg, payload)
+            end
             debugLog("no udp socket for " .. (address.dotted(dst) or "?") .. ":" .. msg.dport)
             return
         end
@@ -324,7 +367,7 @@ local function routeFor(dst)
 end
 
 -- This is a big guy!
-local function sendIP(item)
+sendIP = function(item)
     if type(item) ~= "table" or item.dst == nil then
         return nil, "invalid send item"
     end
@@ -339,6 +382,19 @@ local function sendIP(item)
         end
         deliverLocal(src, dst, item.proto, payload)
         return true
+    end
+
+    -- Recognize that we can ping ourselves lol
+    for _, iface in pairs(ifaces) do
+        if iface.addr == dst then
+            local src = (item.src and item.src ~= 0) and item.src or dst
+            local payload = resolvePayload(item, src)
+            if payload == nil then
+                return nil, "encode failed"
+            end
+            deliverLocal(src, dst, item.proto, payload)
+            return true
+        end
     end
 
     -- 255.255.255.255 by default
@@ -397,7 +453,7 @@ local function sendIP(item)
         return nil, "encode failed"
     end
 
-    local hw = arp.lookup(hop, now())
+    local hw = arp.lookup(iface.name, hop, now())
     if hw then
         return sendFragments(iface, hw, src, dst, item.proto, payloadResolved)
     end
@@ -439,6 +495,35 @@ local function icmpSend(item)
     return sendIP(item)
 end
 
+udpNoSocket = function(src, dst, msg, datagram)
+    if src == 0 or address.isLoopback(src) then return end
+    if dst == 4294967295 then return end
+    if wire.band32(dst, 4026531840) == 3758096384 then return end
+    for _, iface in pairs(ifaces) do
+        if iface.addr and iface.mask and
+            dst == address.broadcastOf(iface.addr, iface.mask)
+        then
+            return
+        end
+    end
+    local embedded = ipv4.encodePacket({
+        src = src,
+        dst = dst,
+        proto = const.PROTOCOLS.UDP,
+        id = 0,
+        flags = 0,
+        offset = 0,
+        ttl = 64,
+        payload = datagram:sub(1, 8),
+    })
+    sendIP({
+        src = dst,
+        dst = src,
+        proto = const.PROTOCOLS.ICMP,
+        payload = icmp.encodeError(icmp.TYPE.DEST_UNREACH, 3, 0, embedded),
+    })
+end
+
 
 local function icmpNotify(clientPid, reqId, result)
     if type(clientPid) ~= "number" or type(result) ~= "table" then return end
@@ -449,7 +534,8 @@ local function icmpNotify(clientPid, reqId, result)
         id = reqId,
         op = "ping",
         type = result.type,
-        dst = result.dst,
+        dst = address.dotted(result.dst),
+        icmpId = result.id,
         seq = result.seq,
         payload = result.payload,
     })
@@ -520,7 +606,20 @@ local function wireInjections()
     ipv4.setLog(log)
     ipv4.setDebug(function(msg) debugLog(msg) end)
 
+    ipv4.setIsLocal(function(dst)
+        if dst == LOOPBACK_ADDR then return true end
+        for _, iface in pairs(ifaces) do
+            if iface.addr == dst then return true end
+        end
+        return false
+    end)
+
     ipv4.setForward(function(msg)
+        -- split horizon: never bounce a packet back out the wire it came in on
+        local route = routeFor(msg.dst)
+        if route == nil or route.iface == msg.inIface then
+            return
+        end
         sendIP({
             src     = msg.src,
             dst     = msg.dst,
@@ -545,7 +644,8 @@ end
 
 local function onModemMessageEvent(...)
     local args = table.pack(...)
-    if args[4] ~= const.ETHER_PORT then return end
+    -- port 0 = linked card, real modems cant open port 0
+    if args[4] ~= const.ETHER_PORT and args[4] ~= 0 then return end
     if state.pid then
         polaris.process.send(state.pid, {
             network = true,
@@ -557,7 +657,7 @@ local function onModemMessageEvent(...)
 end
 
 local function onComponentAdded(_, addressStr, ctype)
-    if state.pid and ctype == "modem" then
+    if state.pid and (ctype == "modem" or ctype == "tunnel") then
         polaris.process.send(state.pid, {
             network = true,
             kind = "event",
@@ -569,7 +669,7 @@ local function onComponentAdded(_, addressStr, ctype)
 end
 
 local function onComponentRemoved(_, addressStr, ctype)
-    if state.pid and ctype == "modem" then
+    if state.pid and (ctype == "modem" or ctype == "tunnel") then
         polaris.process.send(state.pid, {
             network = true,
             kind = "event",
@@ -867,7 +967,9 @@ local function opReload()
     end
     local raised = {}
     for name in pairs(state.conf.autos) do
-        if ethSlotNumber(name) and not ifaces[name] and not adminDown[name] then
+        if (ethSlotNumber(name) or lnkSlotNumber(name)) and
+            not ifaces[name] and not adminDown[name]
+        then
             local ok, err = raise(name, state.conf.ifaces[name])
             if ok then adminDown[name] = nil end
             raised[name] = ok or err
@@ -1372,10 +1474,15 @@ local function dispatch(msg)
             local args = msg.args or {}
             ethernet.onModemMessage(table.unpack(args, 1, args.n or #args))
         elseif ev == "component_added" then
-            knownModems[msg.address] = true
+            if msg.ctype == "tunnel" then
+                knownTunnels[msg.address] = true
+            else
+                knownModems[msg.address] = true
+            end
             local iface = ifaceByHw(msg.address)
             if iface == nil then
-                log("modem added: " .. tostring(msg.address))
+                log((msg.ctype == "tunnel" and "linked card" or "modem") ..
+                    " added: " .. tostring(msg.address))
                 local conf = state.conf or {}
                 local names = {}
                 for name in pairs(conf.autos or {}) do
@@ -1386,7 +1493,13 @@ local function dispatch(msg)
                     if ifaceByHw(msg.address) == nil and
                         not ifaces[name] and not adminDown[name]
                     then
-                        local slot = ethSlotNumber(name)
+                        -- only chase slot names of the same component kind
+                        local slot
+                        if msg.ctype == "tunnel" then
+                            slot = lnkSlotNumber(name)
+                        else
+                            slot = ethSlotNumber(name)
+                        end
                         if slot ~= nil or name == msg.address then
                             raise(name, (conf.ifaces or {})[name], msg.address)
                         end
@@ -1394,7 +1507,11 @@ local function dispatch(msg)
                 end
             end
         elseif ev == "component_removed" then
-            knownModems[msg.address] = nil
+            if msg.ctype == "tunnel" then
+                knownTunnels[msg.address] = nil
+            else
+                knownModems[msg.address] = nil
+            end
             local iface = ifaceByHw(msg.address)
             if iface then
                 log("modem removed: " .. tostring(msg.address) .. " (" .. iface.name .. ")")

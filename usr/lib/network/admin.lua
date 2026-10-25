@@ -183,7 +183,7 @@ function M.ping(dst, icmpId, seq, payload, timeout)
     local result = {
         type = msg.type,
         dst = msg.dst,
-        id = msg.id,
+        id = msg.icmpId,
         seq = msg.seq,
         payload = msg.payload,
     }

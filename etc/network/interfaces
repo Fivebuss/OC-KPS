@@ -7,13 +7,19 @@
 #     metric <n>
 #     mtu <n>
 #
-# Only "inet static" is supported. <name> may be eth<slot> or an exact modem
-# component UUID. lo is implicit and always up as 127.0.0.1/8
+# Only "inet static" is supported. <name> may be eth<slot>, lnk<slot> (linked card)
+# or an exact component UUID. lo is implicit and always up as 127.0.0.1/8
 
 auto eth0
+auto lnk0
 
 iface eth0 inet static
     address 192.168.1.10/24
     gateway 192.168.1.1
     metric 100
-    mtu 8192
+    mtu 1500
+
+iface lnk0 inet static
+    address 192.168.2.15/24
+    metric 199
+    mtu 1500

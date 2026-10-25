@@ -1,5 +1,5 @@
 -- /usr/lib/network/proto/ethernet.lua
--- eth0
+-- eth0 + lnkN (linked cards)
 -- No, wlo1 will not happen. Horrific spec...
 
 local const   = require("network.const")
@@ -37,6 +37,19 @@ local function computeMtu(iface)
     return const.DEFAULTS.mtu
 end
 
+-- Linked cards cap by maxPacketSize instead of device capacity
+local function computeTunnelMtu(iface)
+    if mtuOverride and mtuOverride > 0 then
+        return mtuOverride
+    end
+    local ok, maxSize = pcall(iface.modem.maxPacketSize)
+    if ok and type(maxSize) == "number" and maxSize > 72 then
+        -- same headroom convention as modem capacity
+        return maxSize - 72
+    end
+    return const.DEFAULTS.mtu
+end
+
 -- The actual port and makes a registered thing around the proxy
 function M.add(data)
     local iface = {
@@ -48,13 +61,19 @@ function M.add(data)
         mask = data.mask,
     }
 
-    local open = iface.modem.open and select(1, pcall(iface.modem.open, const.ETHER_PORT))
-    if not open then
-        return nil, "cannot open raw port " .. tostring(const.ETHER_PORT) ..
-            " on " .. tostring(iface.hw)
-    end
+    -- Linked cards: no ports, no broadcast, the peer is implicit
+    if iface.modem.type == "tunnel" then
+        iface.tunnel = true
+        iface.mtu = computeTunnelMtu(iface)
+    else
+        local open = iface.modem.open and select(1, pcall(iface.modem.open, const.ETHER_PORT))
+        if not open then
+            return nil, "cannot open raw port " .. tostring(const.ETHER_PORT) ..
+                " on " .. tostring(iface.hw)
+        end
 
-    iface.mtu = computeMtu(iface)
+        iface.mtu = computeMtu(iface)
+    end
     ifaces[iface.hw] = iface
     byName[iface.name] = iface
     if handler then
@@ -112,7 +131,10 @@ function M.send(iface, dstHw, etype, payload)
         return nil, "no interface"
     end
     local ok, reason
-    if dstHw == const.MAC_BROADCAST then
+    if iface.tunnel then
+        -- point to point: no port, no dst. "broadcast" just hits the peer
+        ok, reason = pcall(iface.modem.send, etype, payload)
+    elseif dstHw == const.MAC_BROADCAST then
         ok, reason = pcall(iface.modem.broadcast, const.ETHER_PORT, etype, payload)
     else
         ok, reason = pcall(iface.modem.send, dstHw, const.ETHER_PORT, etype, payload)
@@ -125,11 +147,16 @@ end
 
 -- Deal with modem events
 function M.onModemMessage(_, localHw, remoteHw, port, ...)
-    if port ~= const.ETHER_PORT then
-        return
-    end
     local iface = ifaces[localHw]
     if not iface then
+        return
+    end
+    -- tunnels are always port 0, and real modems cant even open port 0
+    if iface.tunnel then
+        if port ~= 0 then
+            return
+        end
+    elseif port ~= const.ETHER_PORT then
         return
     end
     local args = table.pack(...)

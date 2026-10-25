@@ -1,6 +1,6 @@
 -- /usr/lib/network/ipc.lua
 -- Like syscalls work
-
+local event = require("event")
 local M = {}
 
 local daemonPid = nil
@@ -101,7 +101,7 @@ function M.wait(filter, timeout)
     end
 
     if type(timeout) == "number" and timeout > 0 then
-        timerId = require("event").timer(timeout, fireTimeout, 1)
+        timerId = event.timer(timeout, fireTimeout, 1)
     end
 
     while true do -- gross
@@ -109,7 +109,7 @@ function M.wait(filter, timeout)
 
         if M.isSignal(value) then
             if timerId then
-                require("event").cancel(timerId)
+                event.cancel(timerId)
                 timerId = nil
             end
             return nil, value
@@ -122,7 +122,7 @@ function M.wait(filter, timeout)
         local ok, matched = pcall(filter, value)
         if ok and matched then
             if timerId then
-                require("event").cancel(timerId)
+                event.cancel(timerId)
                 timerId = nil
             end
             return value, nil

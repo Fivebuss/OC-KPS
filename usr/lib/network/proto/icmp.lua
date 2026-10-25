@@ -7,8 +7,11 @@ local wire = require("network.wire")
 local M = {}
 
 M.TYPE = {
-    ECHO_REPLY   = 0,
-    ECHO_REQUEST = 8,
+    ECHO_REPLY    = 0,
+    DEST_UNREACH  = 3,
+    ECHO_REQUEST  = 8,
+    TTL_EXCEEDED  = 11,
+    PARAM_PROBLEM = 12,
 }
 
 local sendIPFn = nil
@@ -16,7 +19,9 @@ local notifyFn = nil
 local logFn = nil
 
 function M.setSendIP(fn) sendIPFn = fn end
+
 function M.setNotify(fn) notifyFn = fn end
+
 function M.setLog(fn) logFn = fn end
 
 local function log(msg)
@@ -25,22 +30,33 @@ end
 
 -- it looks like: type u8 | code u8 | checksum u16 | rest u32 | payload
 
-local function encodeHeader(itype, code, checksum, rest, payload)
-    return table.concat({
-        wire.packU8(itype),
-        wire.packU8(code),
-        wire.packU16(checksum),
-        wire.packU32(rest or 0),
-        payload or "",
-    })
+-- Big header
+local function buildHeader(itype, code, checksum, rest)
+    rest = (rest or 0) % 4294967296
+    return string.char(
+        itype % 256,
+        code % 256,
+        math.floor(checksum / 256) % 256, checksum % 256,
+        math.floor(rest / 16777216) % 256, math.floor(rest / 65536) % 256,
+        math.floor(rest / 256) % 256, rest % 256
+    )
 end
 
 -- Make the message
 function M.encode(itype, code, icmpId, seq, payload)
     local rest = (icmpId % 65536) * 65536 + (seq % 65536)
-    local zeroed = encodeHeader(itype, code, 0, rest, payload)
+    return M.encodeError(itype, code, rest, payload)
+end
+
+-- Next hop thing
+function M.encodeError(itype, code, rest, embedded)
+    embedded = embedded or ""
+    -- Checksum trick?
+    local zeroed = buildHeader(itype, code, 0, rest) .. embedded
     local checksum = wire.checksum(zeroed)
-    return encodeHeader(itype, code, checksum, rest, payload)
+    return zeroed:sub(1, 2) .. string.char(
+        math.floor(checksum / 256) % 256, checksum % 256
+    ) .. zeroed:sub(5)
 end
 
 -- Decode this nonsense
@@ -56,8 +72,7 @@ function M.decode(data)
         return nil, "truncated header"
     end
     local verify = wire.checksum(data)
-    if verify ~= 0 and checksum ~= 0 then
-        -- checksum == 0 is "unchecksummed"
+    if verify ~= 0 then
         return nil, "checksum mismatch"
     end
 
@@ -68,15 +83,15 @@ function M.decode(data)
 end
 
 local pool = {}
+local poolCount = 0 -- tracked so poolSize() needs no iteration
 
 local function poolKey(src, dst, icmpId, seq)
-    return tostring(src) .. "/" .. tostring(dst) .. "/" .. tostring(icmpId) .. "/" .. tostring(seq)
+    local sdFold = (src + dst * 1000003) % 4294967296
+    return sdFold * 4294967296 + icmpId * 65536 + seq
 end
 
 function M.poolSize()
-    local n = 0
-    for _ in pairs(pool) do n = n + 1 end
-    return n
+    return poolCount
 end
 
 -- Keep an eye on request though
@@ -93,12 +108,16 @@ function M.beginRequest(spec, now)
         payload = spec.payload,
         deadline = now + (spec.timeout or const.DEFAULTS.icmpTimeout),
     }
+    poolCount = poolCount + 1
     return key
 end
 
 local function removeKey(key)
     local entry = pool[key]
-    pool[key] = nil
+    if entry then
+        pool[key] = nil
+        poolCount = poolCount - 1
+    end
     return entry
 end
 
@@ -107,6 +126,7 @@ function M.tick(now)
     for key, entry in pairs(pool) do
         if now >= entry.deadline then
             pool[key] = nil
+            poolCount = poolCount - 1
             if notifyFn and entry.clientPid then
                 local ok, err = pcall(notifyFn, entry.clientPid, entry.reqId, {
                     op = "ping",
@@ -166,6 +186,31 @@ function M.receive(src, dst, msg)
         return true
     end
 
+    if msg.itype == M.TYPE.DEST_UNREACH or msg.itype == M.TYPE.TTL_EXCEEDED then
+        local emb = msg.payload
+        if type(emb) == "string" and #emb >= 28 and emb:byte(10) == const.PROTOCOLS.ICMP then
+            local eSrc = wire.readU32(emb, 13)
+            local eDst = wire.readU32(emb, 17)
+            local rest = wire.readU32(emb, 25)
+            if eSrc and eDst and rest then
+                local eId = math.floor(rest / 65536) % 65536
+                local eSeq = rest % 65536
+                local entry = removeKey(poolKey(eSrc, eDst, eId, eSeq))
+                if entry ~= nil and notifyFn and entry.clientPid then
+                    pcall(notifyFn, entry.clientPid, entry.reqId, {
+                        op = "ping",
+                        type = "error",
+                        dst = entry.dst,
+                        id = eId,
+                        seq = eSeq,
+                        payload = entry.payload,
+                    })
+                end
+            end
+        end
+        return false
+    end
+
     return false
 end
 
@@ -183,6 +228,7 @@ end
 
 function M.reset()
     pool = {}
+    poolCount = 0
 end
 
 return M

@@ -40,7 +40,7 @@ function M.encode(oper, sha, spa, tha, tpa)
         wire.packU16(oper),
         sha,
         wire.packU32(spa % 4294967296),
-        tha,
+        oper == M.OPERATION.REQUEST and string.rep("\0", hlen) or tha,
         wire.packU32(tpa % 4294967296),
     })
 end
@@ -64,6 +64,9 @@ function M.decode(data)
     local oper
     oper, pos = wire.readU16(data, pos)
     if not oper then return nil, "short frame" end
+    if ptype ~= const.ETHER_TYPES.IPv4 then
+        return nil, "unsupported protocol type"
+    end
     if hlen == 0 or hlen > 64 or plen ~= 4 then
         return nil, "unsupported address lengths"
     end
@@ -94,18 +97,20 @@ function M.decode(data)
 end
 
 -- cache
--- [ipNum] = { hw = string, iface = ifaceName, expires = uptime }
+-- [ifaceName] = { [ipNum] = { hw = string, expires = uptime } }
+-- keyed per interface, eth0 and lnk0 dont share a wire
 
 local cache = {}
 
--- Gives cache for ip
-function M.lookup(ip, now)
-    local entry = cache[ip]
+-- Gives cache for ip on an interface
+function M.lookup(ifaceName, ip, now)
+    local ifc = ifaceName and cache[ifaceName] or nil
+    local entry = ifc and ifc[ip] or nil
     if entry == nil then
         return nil
     end
     if now and entry.expires and now >= entry.expires then
-        cache[ip] = nil
+        ifc[ip] = nil
         return nil
     end
     return entry.hw
@@ -113,8 +118,10 @@ end
 
 function M.list()
     local out = {}
-    for ip, entry in pairs(cache) do
-        out[#out + 1] = { ip = ip, hw = entry.hw, iface = entry.iface, expires = entry.expires }
+    for ifaceName, ifc in pairs(cache) do
+        for ip, entry in pairs(ifc) do
+            out[#out + 1] = { ip = ip, hw = entry.hw, iface = ifaceName, expires = entry.expires }
+        end
     end
     return out
 end
@@ -124,24 +131,28 @@ function M.flushCache()
 end
 
 function M.forgetIface(ifaceName)
-    local keep = {}
-    for ip, entry in pairs(cache) do
-        if entry.iface ~= ifaceName then
-            keep[ip] = entry
-        end
-    end
-    cache = keep
+    cache[ifaceName] = nil
 end
 
 local function cachePut(ip, hw, ifaceName, now, expiry)
-    cache[ip] = { hw = hw, iface = ifaceName, expires = now + (expiry or const.DEFAULTS.arpExpire) }
+    if ifaceName == nil then
+        return
+    end
+    local ifc = cache[ifaceName]
+    if ifc == nil then
+        ifc = {}
+        cache[ifaceName] = ifc
+    end
+    ifc[ip] = { hw = hw, expires = now + (expiry or const.DEFAULTS.arpExpire) }
 end
 
 -- Queues look like this (thanks ai)
--- [ipNum] = {
---   iface = iface table the request went out on,
---   tries = number, nextAttempt = uptime, deadline = uptime,
---   items = { { iface = ifaceTable, src = ipNum, encode = fn(src) : payload } }
+-- [ifaceName] = {
+--   [ipNum] = {
+--     iface = iface table the request went out on,
+--     tries = number, nextAttempt = uptime, deadline = uptime,
+--     items = { { iface = ifaceTable, src = ipNum, encode = fn(src) : payload } }
+--   }
 -- }
 
 local pending = {}
@@ -153,12 +164,17 @@ end
 -- Queue unresolved thing
 -- opts are { timeout, retries, deadline }
 function M.enqueue(ip, iface, entry, now, opts)
-    if type(ip) ~= "number" or type(iface) ~= "table" then
+    if type(ip) ~= "number" or type(iface) ~= "table" or iface.name == nil then
         return nil, "invalid arp enqueue"
     end
     opts = opts or {}
     local timeout = opts.timeout or const.DEFAULTS.arpTimeout
-    local queue = pending[ip]
+    local byIp = pending[iface.name]
+    if byIp == nil then
+        byIp = {}
+        pending[iface.name] = byIp
+    end
+    local queue = byIp[ip]
 
     if queue == nil then
         queue = {
@@ -168,7 +184,7 @@ function M.enqueue(ip, iface, entry, now, opts)
             deadline = now + (opts.deadline or defaultDeadline()),
             items = {},
         }
-        pending[ip] = queue
+        byIp[ip] = queue
     end
     if queue.nextAttempt == nil then
         queue.nextAttempt = 0
@@ -184,7 +200,8 @@ end
 
 -- Get rid of arp request
 function M.kick(iface, ip, now, timeout)
-    local queue = pending[ip]
+    local byIp = iface and pending[iface.name] or nil
+    local queue = byIp and byIp[ip] or nil
     if queue == nil or queue.tries > 0 then
         return false
     end
@@ -205,21 +222,23 @@ function M.tick(now, opts)
     local retries = opts.retries or const.DEFAULTS.arpRetries
     local timeout = opts.timeout or const.DEFAULTS.arpTimeout
 
-    for ip, queue in pairs(pending) do
-        if now >= queue.deadline then
-            local dropped = #queue.items
-            pending[ip] = nil
-            log("no arp response for " .. tostring(ip) .. "; " .. dropped .. " packet(s) dropped")
-        elseif queue.tries >= retries then
-            pending[ip] = nil
-            log("arp gave up on " .. tostring(ip))
-        elseif now >= queue.nextAttempt then
-            queue.tries = queue.tries + 1
-            queue.nextAttempt = now + timeout
-            if requestFn then
-                local ok, err = pcall(requestFn, queue.iface, ip)
-                if not ok then
-                    log("retry send failed: " .. tostring(err))
+    for _, byIp in pairs(pending) do
+        for ip, queue in pairs(byIp) do
+            if now >= queue.deadline then
+                local dropped = #queue.items
+                byIp[ip] = nil
+                log("no arp response for " .. tostring(ip) .. "; " .. dropped .. " packet(s) dropped")
+            elseif queue.tries >= retries then
+                byIp[ip] = nil
+                log("arp gave up on " .. tostring(ip))
+            elseif now >= queue.nextAttempt then
+                queue.tries = queue.tries + 1
+                queue.nextAttempt = now + timeout
+                if requestFn then
+                    local ok, err = pcall(requestFn, queue.iface, ip)
+                    if not ok then
+                        log("retry send failed: " .. tostring(err))
+                    end
                 end
             end
         end
@@ -227,12 +246,13 @@ function M.tick(now, opts)
 end
 
 --Hand resolved items to the stack. Returns delivered count
-function M.flush(ip, hw)
-    local queue = pending[ip]
+function M.flush(ifaceName, ip, hw)
+    local byIp = ifaceName and pending[ifaceName] or nil
+    local queue = byIp and byIp[ip] or nil
     if queue == nil then
         return 0
     end
-    pending[ip] = nil
+    byIp[ip] = nil
     local count = 0
     if flushFn then
         for _, entry in ipairs(queue.items) do
@@ -284,7 +304,7 @@ function M.receive(iface, frame, now, expiry)
     if frame.oper == M.OPERATION.REPLY then
         if frame.spa and frame.sha and #frame.sha > 0 then
             cachePut(frame.spa, frame.sha, ifaceName, now, expiry)
-            M.flush(frame.spa, frame.sha)
+            M.flush(ifaceName, frame.spa, frame.sha)
         end
         return true
     end

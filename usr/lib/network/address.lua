@@ -67,36 +67,37 @@ function M.parseCIDR(cidr)
 end
 
 -- netmask
+local _prefixToMask = {}
+do
+    _prefixToMask[0] = 0
+    for p = 1, 31 do
+        -- 2^(32-p)
+        _prefixToMask[p] = 4294967296 - (2 ^ (32 - p))
+    end
+    _prefixToMask[32] = 4294967295
+end
+
 function M.prefixToMask(prefix)
     if type(prefix) ~= "number" or prefix % 1 ~= 0 or prefix < 0 or prefix > 32 then
         return nil, "invalid prefix"
     end
-    local mask = 0
-    for i = 1, prefix do
-        mask = mask + 2 ^ (32 - i)
-    end
-    return mask
+    return _prefixToMask[prefix]
 end
 
 function M.maskToPrefix(mask)
     if type(mask) ~= "number" or mask < 0 or mask % 1 ~= 0 then
         return nil, "invalid mask"
     end
-    if mask == 0 then
-        return 0
+    if mask == 0 then return 0 end
+    if mask == 4294967295 then return 32 end
+    -- hostBits = wire.not32(mask) + 1
+    local hostBits = (4294967295 - mask % 4294967296) + 1
+    local prefix = 32 - math.floor(math.log(hostBits) / math.log(2) + 0.5)
+
+    if prefix < 0 or prefix > 32 or _prefixToMask[prefix] ~= mask % 4294967296 then
+        return nil, "non-contiguous mask"
     end
-    local prefix = 0
-    for i = 31, 0, -1 do
-        if math.floor(mask / 2 ^ i) % 2 == 1 then
-            prefix = prefix + 1
-        else
-            if mask % 2 ^ i ~= 0 then
-                return nil, "non-contiguous mask"
-            end
-            return prefix
-        end
-    end
-    return 32
+    return prefix
 end
 
 function M.networkOf(addr, mask)

@@ -13,16 +13,22 @@ M.FLAG_DF = 2 -- Dont fragment please
 
 local localDeliver = nil
 local forwardFn = nil
+local isLocalFn = nil
 local logFn = nil
 local debugFn = nil
+local errorFn = nil
 
 function M.setLocalDeliver(fn) localDeliver = fn end
 
 function M.setForward(fn) forwardFn = fn end
 
+function M.setIsLocal(fn) isLocalFn = fn end
+
 function M.setLog(fn) logFn = fn end
 
 function M.setDebug(fn) debugFn = fn end
+
+function M.setError(fn) errorFn = fn end
 
 local function log(msg)
     if logFn then pcall(logFn, "ipv4: " .. tostring(msg)) end
@@ -41,42 +47,56 @@ end
 
 local HEADER_LEN = 20
 
+local function buildHeader(src, dst, proto, ttl, id, flags, offset, totalLen, checksum)
+    local fo = flags * 8192 + offset
+    return string.char(
+        0x45, 0x00,
+        math.floor(totalLen / 256) % 256, totalLen % 256,
+        math.floor(id / 256) % 256, id % 256,
+        math.floor(fo / 256) % 256, fo % 256,
+        ttl % 256,
+        proto % 256,
+        math.floor(checksum / 256) % 256, checksum % 256,
+        math.floor(src / 16777216) % 256, math.floor(src / 65536) % 256,
+        math.floor(src / 256) % 256, src % 256,
+        math.floor(dst / 16777216) % 256, math.floor(dst / 65536) % 256,
+        math.floor(dst / 256) % 256, dst % 256
+    )
+end
+
 local function headerChecksum(src, dst, proto, ttl, id, flags, offset, totalLen)
-    local head = table.concat({
-        string.char(0x45, 0x00),
-        wire.packU16(totalLen),
-        wire.packU16(id),
-        wire.packU16(flags * 8192 + offset),
-        wire.packU8(ttl),
-        wire.packU8(proto),
-        wire.packU16(0),
-        wire.packU32(src % 4294967296),
-        wire.packU32(dst % 4294967296),
-    })
-    return wire.checksum(head)
+    local fo = flags * 8192 + offset
+    local sum =
+        0x4500 +
+        totalLen +
+        id +
+        fo +
+        ttl * 256 + proto +
+        math.floor(src / 65536) % 65536 +
+        src % 65536 +
+        math.floor(dst / 65536) % 65536 +
+        dst % 65536
+
+    -- Make 32 16
+    while sum > 65535 do
+        sum = sum % 65536 + math.floor(sum / 65536)
+    end
+    return 65535 - sum
 end
 
 -- Create the full packet
 function M.encodePacket(packet)
-    local totalLen = HEADER_LEN + #(packet.payload or "")
-    local checksum = headerChecksum(
-        packet.src, packet.dst, packet.proto,
-        packet.ttl or 64, packet.id or 0,
-        packet.flags or 0, packet.offset or 0, -- offset in 8-byte, kindly
-        totalLen
-    )
-    return table.concat({
-        string.char(0x45, 0x00),
-        wire.packU16(totalLen),
-        wire.packU16(packet.id or 0),
-        wire.packU16((packet.flags or 0) * 8192 + (packet.offset or 0)),
-        wire.packU8(packet.ttl or 64),
-        wire.packU8(packet.proto),
-        wire.packU16(checksum),
-        wire.packU32(packet.src % 4294967296),
-        wire.packU32(packet.dst % 4294967296),
-        packet.payload or "",
-    })
+    local payload = packet.payload or ""
+    local totalLen = HEADER_LEN + #payload
+    local src = packet.src % 4294967296
+    local dst = packet.dst % 4294967296
+    local ttl = packet.ttl or 64
+    local id = packet.id or 0
+    local flags = packet.flags or 0
+    local offset = packet.offset or 0
+    local proto = packet.proto
+    local checksum = headerChecksum(src, dst, proto, ttl, id, flags, offset, totalLen)
+    return buildHeader(src, dst, proto, ttl, id, flags, offset, totalLen, checksum) .. payload
 end
 
 -- Packet becomes table
@@ -111,27 +131,25 @@ function M.decodePacket(data)
     local offset = flagsAndOffset % 8192
 
     local verify = headerChecksum(src, dst, proto, ttl, id, flags, offset, len)
-    if checksum ~= 0 and checksum ~= verify then
-        -- Checksum of 0?
+    if checksum == 0 or checksum ~= verify then
         return nil, "header checksum mismatch"
     end
-    debug("recv src=" .. (address.dotted(src) or "?") .. " dst=" ..
-        (address.dotted(dst) or "?") .. " proto=" .. proto ..
-        " id=" .. id .. " flags=" .. flags .. " off=" .. offset .. " len=" .. len)
+
+    if debugFn then
+        debug("recv src=" .. (address.dotted(src) or "?") .. " dst=" ..
+            (address.dotted(dst) or "?") .. " proto=" .. proto ..
+            " id=" .. id .. " flags=" .. flags .. " off=" .. offset .. " len=" .. len)
+    end
 
     if len < HEADER_LEN or len > #data then
         return nil, "bad total length"
-    end
-
-    if ttl <= 0 then
-        return nil, "ttl expired"
     end
 
     return {
         src = src,
         dst = dst,
         proto = proto,
-        ttl = ttl - 1, -- hop
+        ttl = ttl,
         id = id,
         flags = flags,
         offset = offset,
@@ -139,7 +157,7 @@ function M.decodePacket(data)
     }
 end
 
--- MTU handliing
+-- MTU handling
 function M.fragments(payload, mtu, id)
     local list = {}
     local maxPayload = mtu - HEADER_LEN
@@ -169,21 +187,19 @@ function M.fragments(payload, mtu, id)
 end
 
 local fragBuffers = {}
+local fragBufferCount = 0
 
-local function bufferCount()
-    local n = 0
-    for _ in pairs(fragBuffers) do n = n + 1 end
-    return n
-end
-
-local function bufferKey(packet)
-    return tostring(packet.src) .. "/" .. tostring(packet.dst) .. "/" .. tostring(packet.id)
+local function bufferKey(src, dst, proto, id)
+    -- combine src into dst
+    local sdFold = (src + dst * 1000003) % 4294967296
+    return sdFold * 16777216 + proto * 65536 + id
 end
 
 -- Assemble packet
 function M.reassemble(packet, now, timeout)
     timeout = timeout or const.DEFAULTS.fragTimeout
-    local mfSet = math.floor((packet.flags or 0) / M.FLAG_MF) % 2 == 1
+
+    local mfSet = (packet.flags or 0) & M.FLAG_MF ~= 0
     local hasOffset = (packet.offset or 0) > 0
 
     if not mfSet and not hasOffset then
@@ -196,10 +212,10 @@ function M.reassemble(packet, now, timeout)
         }
     end
 
-    local key = bufferKey(packet)
+    local key = bufferKey(packet.src, packet.dst, packet.proto, packet.id)
     local buffer = fragBuffers[key]
     if buffer == nil then
-        if bufferCount() >= const.FRAG_BUFFER_MAX then
+        if fragBufferCount >= const.FRAG_BUFFER_MAX then
             -- Buffer bounds
             local oldestKey, oldest = nil, nil
             for k, b in pairs(fragBuffers) do
@@ -209,6 +225,7 @@ function M.reassemble(packet, now, timeout)
             end
             if oldestKey then
                 fragBuffers[oldestKey] = nil
+                fragBufferCount = fragBufferCount - 1
             end
         end
         buffer = {
@@ -219,30 +236,39 @@ function M.reassemble(packet, now, timeout)
             parts = {},
         }
         fragBuffers[key] = buffer
+        fragBufferCount = fragBufferCount + 1
     end
     buffer.parts[packet.offset] = packet.payload
 
-    if mfSet then
+    if not mfSet and buffer.finalOffset == nil then
+        buffer.finalOffset = packet.offset
+    end
+    if buffer.finalOffset == nil then
         return nil
     end
 
-    -- The packets
-    local pieces = {}
-    local offset = 0
-    while true do -- ew
-        local piece = buffer.parts[offset]
-        if piece == nil or piece == 0 then
+    local piece = buffer.parts[0]
+    if piece == nil or #piece == 0 or #piece % 8 ~= 0 then
+        return nil
+    end
+    local pieces = { piece }
+    local offset = #piece / 8
+    while offset < buffer.finalOffset do
+        local next = buffer.parts[offset]
+        if next == nil or #next == 0 or #next % 8 ~= 0 then
             return nil
         end
-        pieces[#pieces + 1] = piece
-        if #piece % 8 ~= 0 or piece == 0 then
-            break
-        end
-        offset = offset + math.floor(#piece / 8)
-        coroutine.yield()
+        pieces[#pieces + 1] = next
+        offset = offset + #next / 8
     end
+    local finalPiece = buffer.parts[buffer.finalOffset]
+    if finalPiece == nil or #finalPiece == 0 then
+        return nil
+    end
+    pieces[#pieces + 1] = finalPiece
 
     fragBuffers[key] = nil
+    fragBufferCount = fragBufferCount - 1
     return {
         src = buffer.src,
         dst = buffer.dst,
@@ -253,15 +279,25 @@ end
 
 -- Expiry
 function M.tick(now)
-    local keep, dropped = {}, 0
+    local dropped = 0
     for key, buffer in pairs(fragBuffers) do
         if now >= buffer.expires then
+            fragBuffers[key] = nil
+            fragBufferCount = fragBufferCount - 1
             dropped = dropped + 1
-        else
-            keep[key] = buffer
+            if errorFn then
+                pcall(errorFn, {
+                    reason = "frag-timeout",
+                    packet = {
+                        src = buffer.src,
+                        dst = buffer.dst,
+                        proto = buffer.proto
+                    },
+                    iface = nil
+                })
+            end
         end
     end
-    fragBuffers = keep
     return dropped
 end
 
@@ -292,6 +328,7 @@ function M.addRoute(spec)
         gateway = gateway,
         metric = spec.metric or 1,
         iface = spec.iface,
+        ptp = spec.ptp == true,
     }
     routes[#routes + 1] = route
     table.sort(routes, function(a, b)
@@ -301,6 +338,10 @@ function M.addRoute(spec)
         if a.metric ~= b.metric then
             return a.metric < b.metric
         end
+        -- p2p wins
+        if a.ptp ~= b.ptp then
+            return a.ptp
+        end
         return a.id < b.id
     end)
     return route
@@ -308,19 +349,14 @@ end
 
 -- Prefix. Bigger wins
 function M.lookup(dst)
-    local best, bestMetric, bestId
+    dst = dst % 4294967296
     for i = 1, #routes do
         local route = routes[i]
-        if wire.band32(dst % 4294967296, route.mask) == route.network then
-            if best == nil or route.prefix > best.prefix or
-                (route.prefix == best.prefix and route.metric < bestMetric) or
-                (route.prefix == best.prefix and route.metric == bestMetric and route.id < bestId)
-            then
-                best, bestMetric, bestId = route, route.metric, route.id
-            end
+        if wire.band32(dst, route.mask) == route.network then
+            return route
         end
     end
-    return best
+    return nil
 end
 
 function M.list()
@@ -369,29 +405,60 @@ function M.receive(iface, data, now)
         log("drop: " .. tostring(reason))
         return false
     end
-
-    -- Acceptance test
-    local allowed = false
-    if packet.dst == iface.addr then
-        allowed = true
-    elseif packet.dst == 4294967295 then -- 255.255.255.255
-        allowed = true
-    elseif iface.addr and iface.mask then
-        if packet.dst == address.broadcastOf(iface.addr, iface.mask) then
+    local allowed = isLocalFn ~= nil and isLocalFn(packet.dst) or false
+    if not allowed then
+        if packet.dst == iface.addr then
             allowed = true
+        elseif packet.dst == 4294967295 then -- 255.255.255.255
+            allowed = true
+        elseif iface.addr and iface.mask then
+            if packet.dst == address.broadcastOf(iface.addr, iface.mask) then
+                allowed = true
+            end
         end
     end
     if not allowed then
-        if forwardFn and packet.ttl > 0 then
-            debug("forward: dst " .. (address.dotted(packet.dst) or "?"))
-            local msg = M.reassemble(packet, now)
-            if msg then
-                pcall(forwardFn, msg)
+        local fwdTtl = packet.ttl - 1
+        if forwardFn == nil or fwdTtl <= 0 then
+            if debugFn then
+                debug("drop: dst " .. (address.dotted(packet.dst) or "?") ..
+                    (fwdTtl <= 0 and " (ttl expired)" or " (no forwarder)"))
             end
-        else
-            debug("drop: dst " .. (address.dotted(packet.dst) or "?") ..
-                (packet.ttl <= 0 and " (ttl expired)" or " (no forwarder)"))
+            if fwdTtl <= 0 and errorFn and forwardFn then
+                pcall(errorFn, {
+                    reason = "ttl",
+                    packet = packet,
+                    iface = iface
+                })
+            end
+            return false
         end
+        if debugFn then
+            debug("forward: dst " .. (address.dotted(packet.dst) or "?"))
+        end
+        if (packet.flags or 0) % 4 >= 2 or
+            (#packet.payload + HEADER_LEN) > iface.mtu
+        then
+            if errorFn then
+                pcall(errorFn, {
+                    reason = "frag-needed",
+                    packet = packet,
+                    iface = iface
+                })
+            end
+            return false
+        end
+        pcall(forwardFn, {
+            src = packet.src,
+            dst = packet.dst,
+            proto = packet.proto,
+            payload = packet.payload,
+            id = packet.id,
+            flags = packet.flags,
+            offset = packet.offset,
+            ttl = fwdTtl,
+            inIface = iface and iface.name or nil,
+        })
         return false
     end
 
@@ -412,10 +479,12 @@ end
 
 function M.reset()
     fragBuffers = {}
+    fragBufferCount = 0
 end
 
 function M.resetAll()
     fragBuffers = {}
+    fragBufferCount = 0
     routes = {}
 end
 

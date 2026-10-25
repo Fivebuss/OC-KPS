@@ -7,50 +7,59 @@
 --     waiter = { pid, reqId } | nil }
 
 
-local const = require("network.const")
-local wire = require("network.wire")
+local const         = require("network.const")
+local wire          = require("network.wire")
 
-local M = {}
+local M             = {}
 
 local socketCounter = 0
-local sockets = {} -- [id] = socket record
+local socketCount   = 0  -- tracked so M.count() needs no iteration
+local sockets       = {} -- [id] = socket record
 
-local notifyFn = nil
-local logFn = nil
+local notifyFn      = nil
+local logFn         = nil
 
 function M.setNotify(fn) notifyFn = fn end
+
 function M.setLog(fn) logFn = fn end
 
 local function log(msg)
     if logFn then pcall(logFn, "udp: " .. tostring(msg)) end
 end
 
+-- Yes I cache checksum
+local function makePseudoPrefix(src, dst)
+    src = src % 4294967296
+    dst = dst % 4294967296
+    return string.char(
+        math.floor(src / 16777216) % 256, math.floor(src / 65536) % 256,
+        math.floor(src / 256) % 256, src % 256,
+        math.floor(dst / 16777216) % 256, math.floor(dst / 65536) % 256,
+        math.floor(dst / 256) % 256, dst % 256,
+        0, const.PROTOCOLS.UDP % 256
+    )
+end
+
+local function u16be(v)
+    return string.char(math.floor(v / 256) % 256, v % 256)
+end
+
 -- Makes it
 function M.encodeDatagram(sport, dport, payload, src, dst)
     local length = 8 + #payload
-    local zeroed = table.concat({
-        wire.packU16(sport),
-        wire.packU16(dport),
-        wire.packU16(length),
-        wire.packU16(0),
-        payload,
-    })
-    local pseudo = table.concat({
-        wire.packU32(src % 4294967296),
-        wire.packU32(dst % 4294967296),
-        wire.packU8(0),
-        wire.packU8(const.PROTOCOLS.UDP),
-        wire.packU16(length),
-        zeroed,
-    })
-    local checksum = wire.checksum(pseudo)
-    return table.concat({
-        wire.packU16(sport),
-        wire.packU16(dport),
-        wire.packU16(length),
-        wire.packU16(checksum),
-        payload,
-    })
+    local lenWord = u16be(length)
+    local zeroed = string.char(
+        math.floor(sport / 256) % 256, sport % 256,
+        math.floor(dport / 256) % 256, dport % 256,
+        lenWord:byte(1), lenWord:byte(2),
+        0, 0 -- placeholder
+    ) .. payload
+
+    local checksum = wire.checksum(makePseudoPrefix(src, dst) .. lenWord .. zeroed)
+    if checksum == 0 then
+        checksum = 65535 -- 0x0000 is not a checksum
+    end
+    return zeroed:sub(1, 6) .. u16be(checksum) .. zeroed:sub(9)
 end
 
 -- Get a table back
@@ -70,15 +79,9 @@ function M.decodeDatagram(data, src, dst)
     end
 
     if checksum ~= 0 then
-        local pseudo = table.concat({
-            wire.packU32(src % 4294967296),
-            wire.packU32(dst % 4294967296),
-            wire.packU8(0),
-            wire.packU8(const.PROTOCOLS.UDP),
-            wire.packU16(length),
-            data:sub(1, length),
-        })
-        if wire.checksum(pseudo) ~= 0 then
+        -- Checksum trick
+        local lenWord = u16be(length)
+        if wire.checksum(makePseudoPrefix(src, dst) .. lenWord .. data:sub(1, length)) ~= 0 then
             return nil, "checksum mismatch"
         end
     end
@@ -101,7 +104,7 @@ end
 
 function M.list()
     local out = {}
-    for id, sock in pairs(sockets) do
+    for _, sock in pairs(sockets) do
         out[#out + 1] = sock
     end
     table.sort(out, function(a, b) return a.id < b.id end)
@@ -109,15 +112,14 @@ function M.list()
 end
 
 function M.count()
-    local n = 0
-    for _ in pairs(sockets) do n = n + 1 end
-    return n
+    return socketCount
 end
 
 function M.remove(id)
     local sock = sockets[id]
     if sock then
         sockets[id] = nil
+        socketCount = socketCount - 1
     end
     return sock
 end
@@ -127,6 +129,7 @@ function M.removeOwnedBy(pid)
     for id, sock in pairs(sockets) do
         if sock.owner == pid then
             sockets[id] = nil
+            socketCount = socketCount - 1
             count = count + 1
         end
     end
@@ -139,6 +142,7 @@ function M.removeBoundTo(addrNum)
     for id, sock in pairs(sockets) do
         if sock.laddr == addrNum then
             sockets[id] = nil
+            socketCount = socketCount - 1
             count = count + 1
         end
     end
@@ -220,6 +224,7 @@ function M.bind(laddr, lport, opts)
         waiter = nil,
     }
     sockets[id] = sock
+    socketCount = socketCount + 1
     return sock
 end
 
@@ -262,7 +267,7 @@ end
 
 function M.findSocket(dst, src, dstPort, srcPort)
     local best, bestScore
-    for id, sock in pairs(sockets) do
+    for _, sock in pairs(sockets) do
         local score = matchScore(sock, dst, src, dstPort, srcPort)
         if score and (best == nil or score > bestScore) then
             best, bestScore = sock, score
@@ -273,6 +278,22 @@ end
 
 -- Send a datagram to queue
 function M.deliver(sock, src, srcPort, payload)
+    local waiter = sock.waiter
+    if waiter then
+        sock.waiter = nil
+        if notifyFn then
+            pcall(notifyFn, waiter.pid, {
+                network = true,
+                kind = "data",
+                pid = waiter.pid,
+                ref = sock.id,
+                data = payload,
+                from = src,
+                port = srcPort,
+            })
+        end
+        return true
+    end
     if #sock.queue >= const.UDP_QUEUE_MAX then
         table.remove(sock.queue, 1)
         log("socket " .. tostring(sock.id) .. " queue overflow; dropped oldest")
@@ -282,23 +303,6 @@ function M.deliver(sock, src, srcPort, payload)
         port = srcPort,
         data = payload,
     }
-
-    local waiter = sock.waiter
-    if waiter then
-        local entry = table.remove(sock.queue, 1)
-        sock.waiter = nil
-        if notifyFn then
-            pcall(notifyFn, waiter.pid, {
-                network = true,
-                kind = "data",
-                pid = waiter.pid,
-                ref = sock.id,
-                data = entry.data,
-                from = entry.from,
-                port = entry.port,
-            })
-        end
-    end
     return true
 end
 
@@ -324,6 +328,7 @@ end
 
 function M.reset()
     sockets = {}
+    socketCount = 0
 end
 
 return M

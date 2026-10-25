@@ -249,6 +249,9 @@ function scheduler.signal(cid, sig, ...)
     -- CHLD does nothing
 
     -- Hey, wakeup! and prioritize event signals
+    if t.wakeAt ~= nil then
+        t.wakeAt = 0
+    end
     if t.waiting then
         t.waiting = false
 
