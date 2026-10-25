@@ -138,8 +138,29 @@ function M.encodeSegment(seg, src, dst)
         -- MSS option: kind=2, len=4, value u16
         opts = string.char(2, 4,
             math.floor(seg.mss / 256) % 256, seg.mss % 256)
-        dataOffset = 6
     end
+    if hasFlag(seg.flags, M.FLAGS.SYN) and seg.sackPermitted then
+        -- SACK boy
+        opts = opts .. string.char(4, 2)
+    end
+    if seg.sackBlocks and #seg.sackBlocks > 0 then
+        local sackOpt = string.char(5, 2 + 8 * #seg.sackBlocks)
+        for _, block in ipairs(seg.sackBlocks) do
+            sackOpt = sackOpt .. string.char(
+                math.floor(block.left / 16777216) % 256, math.floor(block.left / 65536) % 256,
+                math.floor(block.left / 256) % 256, block.left % 256,
+                math.floor(block.right / 16777216) % 256, math.floor(block.right / 65536) % 256,
+                math.floor(block.right / 256) % 256, block.right % 256
+            )
+        end
+        opts = opts .. sackOpt
+    end
+
+    local pad = (4 - #opts % 4) % 4
+    if pad > 0 then
+        opts = opts .. string.rep(string.char(1), pad)
+    end
+    dataOffset = 5 + #opts / 4
     local window   = seg.window or const.TCP_WINDOW
     local payload  = seg.payload or ""
 
@@ -185,6 +206,8 @@ function M.decodeSegment(data, src, dst)
 
     -- Hopefully bad options dont crash entire thing anymore
     local mss = nil
+    local sackPermitted = false
+    local sackBlocks = {}
     local pos = HEADER_LEN + 1
     local optEnd = dataOffset * 4
     while pos <= optEnd do
@@ -200,6 +223,19 @@ function M.decodeSegment(data, src, dst)
             end
             if kind == 2 and len == 4 then
                 mss = wire.readU16(data, pos + 2)
+            elseif kind == 4 and len == 2 then
+                sackPermitted = true
+            elseif kind == 5 and len >= 10 and (len - 2) % 8 == 0 then
+                local nBlocks = (len - 2) / 8
+                local bpos = pos + 2
+                for _ = 1, nBlocks do
+                    local left = wire.readU32(data, bpos)
+                    local right = wire.readU32(data, bpos + 4)
+                    if left and right then
+                        sackBlocks[#sackBlocks + 1] = { left = left, right = right }
+                    end
+                    bpos = bpos + 8
+                end
             end
             pos = pos + len
         end
@@ -213,6 +249,8 @@ function M.decodeSegment(data, src, dst)
         flags = flags,
         window = window,
         mss = mss,
+        sackPermitted = sackPermitted,
+        sackBlocks = sackBlocks,
         payload = #data > optEnd and data:sub(optEnd + 1) or "",
     }
 end
@@ -228,9 +266,10 @@ local function rttSample(sock, sample)
         sock.srtt = sample
         sock.rttvar = sample / 2
     else
+        local prevSrtt = sock.srtt
         sock.srtt = sock.srtt * (1 - 0.125) + sample * 0.125
         sock.rttvar = sock.rttvar * (1 - 0.25) +
-            math.abs(sock.srtt - sample) * 0.25
+            math.abs(prevSrtt - sample) * 0.25
     end
     sock.rto = math.max(1, sock.srtt + 4 * sock.rttvar)
 end
@@ -383,6 +422,10 @@ local function allocate(laddr, lport, opts)
         sndInFlight = 0,
         rcvQueue = {},
         rcvPending = 0, -- stupid optimization
+        rcvOoo = {},
+        rcvOooCount = 0,
+        sackBlocks = {},
+        sackPermitted = false,
         acceptQueue = opts.listen and {} or nil,
         eof = false,
         waiter = nil,
@@ -575,6 +618,28 @@ local function transmitEntry(sock, entry)
     if sendIPFn == nil or sock.raddr == 0 or sock.laddr == 0 then
         return nil, "not connected"
     end
+    local sack = nil
+    if sock.sackPermitted and sock.rcvOooCount > 0 then
+        local sorted = {}
+        for _, entry2 in pairs(sock.rcvOoo) do
+            sorted[#sorted + 1] = entry2
+        end
+        table.sort(sorted, function(a, b) return a.seq < b.seq end)
+        local blocks, cur = {}, nil
+        for _, e in ipairs(sorted) do
+            local l, r = e.seq, (e.seq + e.len) % 4294967296
+            if cur == nil then
+                cur = { left = l, right = r }
+            elseif l == cur.right then
+                cur.right = r
+            else
+                blocks[#blocks + 1] = cur
+                cur = { left = l, right = r }
+            end
+        end
+        if cur then blocks[#blocks + 1] = cur end
+        sack = blocks
+    end
     local payload = M.encodeSegment({
         sport = sock.lport,
         dport = sock.rport,
@@ -583,6 +648,8 @@ local function transmitEntry(sock, entry)
         flags = entry.flags,
         window = rcvWindow(sock),
         mss = entry.mss,
+        sackPermitted = hasFlag(entry.flags, M.FLAGS.SYN) and sock.sackPermitted or nil,
+        sackBlocks = sack,
         payload = entry.payload or "",
     }, sock.laddr, sock.raddr)
 
@@ -769,6 +836,10 @@ function M.connect(sock, raddr, rport, src, mssAdv, waiter, nowNum)
     sock.rport         = rport
     sock.mssAdv        = mssAdv
     sock.mss           = mssAdv
+    sock.sackPermitted = false
+    sock.rcvOoo        = {}
+    sock.rcvOooCount   = 0
+    sock.sackBlocks    = {}
     sock.iss           = math.random(0, 4294967295)
     sock.sndUna        = sock.iss
     sock.sndNxt        = (sock.iss + 1) % 4294967296
@@ -802,6 +873,7 @@ local function acceptSyn(listener, src, dst, seg)
         listener = listener.id,
         mssAdv = ourMss,
         mss = math.min(ourMss, peerMss),
+        sackPermitted = seg.sackPermitted or false,
         iss = math.random(0, 4294967295),
         irs = seg.seq,
         sndUna = nil,
@@ -814,6 +886,9 @@ local function acceptSyn(listener, src, dst, seg)
         sndInFlight = 0,
         rcvQueue = {},
         rcvPending = 0,
+        rcvOoo = {},
+        rcvOooCount = 0,
+        sackBlocks = {},
         acceptQueue = nil,
         eof = false,
         waiter = nil,
@@ -897,6 +972,9 @@ local function processSegment(sock, src, dst, seg)
         local prevUna = sock.sndUna
         advanceUna(sock, seg.ack, nowNum)
         sock.sndWnd = seg.window or sock.sndWnd
+        if seg.sackBlocks and #seg.sackBlocks > 0 then
+            sock.sackBlocks = seg.sackBlocks
+        end
         if seqLe(sock.sndUna, prevUna) and
             segLen(seg) == 0 and not hasFlag(flags, M.FLAGS.SYN) and
             not hasFlag(flags, M.FLAGS.FIN)
@@ -921,6 +999,9 @@ local function processSegment(sock, src, dst, seg)
         if hasFlag(flags, M.FLAGS.SYN) then
             if seg.mss and seg.mss > 0 and sock.mss then
                 sock.mss = math.min(sock.mss, seg.mss)
+            end
+            if seg.sackPermitted then
+                sock.sackPermitted = true
             end
             sock.irs    = seg.seq
             sock.rcvNxt = (seg.seq + 1) % 4294967296
@@ -978,6 +1059,37 @@ local function processSegment(sock, src, dst, seg)
                 finSeen = true
             end
             sock.rcvNxt = (sock.rcvNxt + length) % 4294967296
+            -- out of order time
+            while true do
+                local buffered = sock.rcvOoo[sock.rcvNxt]
+                if not buffered then break end
+                if #buffered.payload > 0 then
+                    if #sock.rcvQueue >= const.TCP_QUEUE_MAX then
+                        local evicted = table.remove(sock.rcvQueue, 1)
+                        sock.rcvPending = math.max(0, sock.rcvPending - #evicted)
+                    end
+                    sock.rcvQueue[#sock.rcvQueue + 1] = buffered.payload
+                    sock.rcvPending = sock.rcvPending + #buffered.payload
+                end
+                sock.rcvOoo[sock.rcvNxt] = nil
+                sock.rcvOooCount = sock.rcvOooCount - 1
+                if hasFlag(buffered.flags, M.FLAGS.FIN) then
+                    finSeen = true
+                end
+                sock.rcvNxt = (sock.rcvNxt + buffered.len) % 4294967296
+            end
+        else
+            -- out of order
+            if seg.seq ~= sock.rcvNxt and seqLt(sock.rcvNxt, seg.seq) and
+                sock.rcvOooCount < const.TCP_QUEUE_MAX then
+                sock.rcvOoo[seg.seq] = {
+                    seq = seg.seq,
+                    payload = seg.payload,
+                    len = length,
+                    flags = flags,
+                }
+                sock.rcvOooCount = sock.rcvOooCount + 1
+            end
         end
         needAck = true
     end
@@ -1234,6 +1346,14 @@ function M.tick(nowNum)
         if sock.state == "TIME_WAIT" and nowNum >= (sock.timeWaitDeadline or 0) then
             removeSocket(sock)
         end
+    end
+end
+
+function M.setPmtudMss(src, dst, sport, dport, newMtu)
+    local sock = findSocket(dst, src, dport, sport)
+    if sock then
+        local newMss = math.max(newMtu - 40, 1)
+        sock.mss = math.min(sock.mss or newMss, newMss)
     end
 end
 

@@ -17,12 +17,15 @@ M.TYPE = {
 local sendIPFn = nil
 local notifyFn = nil
 local logFn = nil
+local pmtudFn = nil
 
 function M.setSendIP(fn) sendIPFn = fn end
 
 function M.setNotify(fn) notifyFn = fn end
 
 function M.setLog(fn) logFn = fn end
+
+function M.setPmtudFn(fn) pmtudFn = fn end
 
 local function log(msg)
     if logFn then pcall(logFn, "icmp: " .. tostring(msg)) end
@@ -79,7 +82,7 @@ function M.decode(data)
     local icmpId = math.floor(rest / 65536) % 65536
     local seq = rest % 65536
     local payload = #data > 8 and data:sub(9) or ""
-    return { itype = itype, code = code, icmpId = icmpId, seq = seq, payload = payload }
+    return { itype = itype, code = code, rest = rest, icmpId = icmpId, seq = seq, payload = payload }
 end
 
 local pool = {}
@@ -205,6 +208,20 @@ function M.receive(src, dst, msg)
                         seq = eSeq,
                         payload = entry.payload,
                     })
+                end
+            end
+        end
+        if msg.itype == M.TYPE.DEST_UNREACH and msg.code == 4 then
+            -- PMTUD exists now
+            local emb = msg.payload
+            if type(emb) == "string" and #emb >= 28 and emb:byte(10) == const.PROTOCOLS.TCP then
+                local eSrc = wire.readU32(emb, 13)
+                local eDst = wire.readU32(emb, 17)
+                local eSport = wire.readU16(emb, 21)
+                local eDport = wire.readU16(emb, 23)
+                local newMtu = msg.rest % 65536
+                if pmtudFn and eSrc and eDst and eSport and eDport and newMtu > 0 then
+                    pcall(pmtudFn, eSrc, eDst, eSport, eDport, newMtu)
                 end
             end
         end

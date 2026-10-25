@@ -11,7 +11,7 @@ network.udp.close(sock)
 ]]--
 
 local const = require("network.const")
-local websocket = require("network.address")
+local address = require("network.address")
 local ipc = require("network.ipc")
 local config = require("network.config")
 local admin = require("network.admin")
@@ -20,7 +20,7 @@ local tcp = require("network.socket.tcp")
 
 local M = {
     const = const,
-    address = websocket,
+    address = address,
     ipc = ipc,
     config = config,
     admin = admin,
