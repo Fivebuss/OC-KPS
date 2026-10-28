@@ -106,9 +106,9 @@ end
 
 -- Internal tty characters
 local sigacts = {
-    D = true,       -- ^D eof
-    C = "INT",      -- ^C int
-    Z = "TSTP",     -- ^Z
+    D = true,        -- ^D eof
+    C = "INT",       -- ^C int
+    Z = "TSTP",      -- ^Z
     ["\\"] = "KILL", -- ^\ quit
 }
 
@@ -151,8 +151,10 @@ function tty.new(gpu)
         bg = 0,
         fgp = true,
         bgp = true,
-        rb = "", -- input read buffer
-        wb = "", -- output line-buffering buffer
+        rb = "",          -- input read buffer
+        wb = "",          -- output line-buffering buffer
+
+        discipline = nil, -- see setLineDiscipline
     }
 
     -- Palette selection, ported from cmdline to polaris.config
@@ -513,7 +515,7 @@ function tty.new(gpu)
             saved.x, saved.y, saved.char = cur.x, cur.y, c
             saved.fg, saved.bg, saved.fgp, saved.bgp = savedFg, savedBg, savedFgp, savedBgp
         else
-            t.cursorSaved = { x=cur.x, y=cur.y, char=c, fg=savedFg, bg=savedBg, fgp=savedFgp, bgp=savedBgp }
+            t.cursorSaved = { x = cur.x, y = cur.y, char = c, fg = savedFg, bg = savedBg, fgp = savedFgp, bgp = savedBgp }
         end
 
         if glyph then
@@ -573,9 +575,12 @@ function tty.new(gpu)
         end
 
         str = str:gsub("[\t\a\r]", function(c)
-            if c == "\t" then return "  "
-            --elseif c == "\a" then computer.beep(); return ""  -- OC devs why must you make beep yield internally :(
-            else return "\27[G" end
+            if c == "\t" then
+                return "  "
+                --elseif c == "\a" then computer.beep(); return ""  -- OC devs why must you make beep yield internally :(
+            else
+                return "\27[G"
+            end
         end)
 
         while #str > 0 do
@@ -755,6 +760,15 @@ function tty.new(gpu)
         return self.attributes.cursor
     end
 
+    -- Readline can now do stuff without stealing event handlers, imagine that
+    function self:setDiscipline(disc)
+        self.discipline = disc
+    end
+
+    function self:removeDiscipline()
+        self.discipline = nil
+    end
+
     -- Calling this just registers with a uid instead
 
     -- This makes my life easier
@@ -783,6 +797,11 @@ function tty.new(gpu)
         if self.suspended then return end
         if char == 0 and code == 0 then return end
         if self.attributes.xoff then return end
+
+        local disc = self.discipline
+        if disc and disc.onKeyDown and disc:onKeyDown(self, char, code) then
+            return
+        end
 
         local ch = char
         local outChar = aliases[code] or
@@ -873,6 +892,12 @@ function tty.new(gpu)
 
     function self:clipboard(text)
         if self.suspended or self.attributes.xoff then return end
+
+        local disc = self.discipline
+        if disc and disc.onClipboard and disc:onClipboard(self, text) then
+            return
+        end
+
         if not self.attributes.raw then
             text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
         end
@@ -942,6 +967,7 @@ function tty.new(gpu)
 
     function self:close()
         self:flush()
+        self:removeDiscipline()
         event.cancel(self.keyHandlerId)
         event.cancel(self.blinkTimerId)
         self.writer:close()

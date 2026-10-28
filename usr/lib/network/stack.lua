@@ -289,6 +289,8 @@ end
 local sendIP
 local udpNoSocket
 
+local loopbackQueue = {}
+
 local function deliverLocal(src, dst, proto, payload)
     if proto == const.PROTOCOLS.UDP then
         local msg = udp.decodeDatagram(payload, src, dst)
@@ -380,7 +382,7 @@ sendIP = function(item)
         if payload == nil then
             return nil, "encode failed"
         end
-        deliverLocal(src, dst, item.proto, payload)
+        loopbackQueue[#loopbackQueue + 1] = { src = src, dst = dst, proto = item.proto, payload = payload }
         return true
     end
 
@@ -392,7 +394,7 @@ sendIP = function(item)
             if payload == nil then
                 return nil, "encode failed"
             end
-            deliverLocal(src, dst, item.proto, payload)
+            loopbackQueue[#loopbackQueue + 1] = { src = src, dst = dst, proto = item.proto, payload = payload }
             return true
         end
     end
@@ -717,6 +719,14 @@ end
 
 local function stackTick()
     local nowNum = now()
+
+    -- Fix localhost TCP
+    local drained = loopbackQueue
+    loopbackQueue = {}
+    for _, pkt in ipairs(drained) do
+        deliverLocal(pkt.src, pkt.dst, pkt.proto, pkt.payload)
+    end
+
     arp.tick(nowNum, {
         retries = state.cfg.arpRetries,
         timeout = state.cfg.arpTimeout,

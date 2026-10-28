@@ -89,7 +89,11 @@ log("Registered module: component")
 polaris.devfs = require("devfs")
 polaris.devfs.mount(polaris.config["devroot"] or "/dev")
 polaris.devfs.register(polaris.devfs.proxy)
-log("Registered module: devfs\ndevfs: mounted /dev")
+log("Registered module: devfs\ndevfs: mounted devfs to /dev")
+polaris.procfs = require("procfs")
+polaris.procfs.register(polaris.devfs)
+filesystem.mount(filesystem.internal.proxy("/dev/proc", {bind = true}), "/proc")
+log("Registered module: procfs\nprocfs: mounted procfs to /dev/proc and /proc")
 
 -- Mount tmp
 if computer.tmpAddress() then
