@@ -6,6 +6,8 @@
 local event = require("event")
 local component = require("component")
 
+local devfs = polaris.devfs
+
 local console = {}
 local gpus = {}
 local screenMap = {}
@@ -17,6 +19,18 @@ local function getKeyboards(screen_addr)
     local set = {}
     for _, kb in ipairs(result) do set[kb] = true end
     return set
+end
+
+-- Naming them
+local function next_tty_name()
+    local used = {}
+    for _, meta in pairs(ttyRegistry) do
+        local n = tonumber(meta.name:match("^tty(%d+)$"))
+        if n then used[n] = true end
+    end
+    local n = 0
+    while used[n] do n = n + 1 end
+    return "tty" .. n
 end
 
 local function bindGpu(gpu_addr, screen_addr)
@@ -43,6 +57,7 @@ local function unbindGpu(gpu_addr)
     end
     screenMap[entry.screen] = nil
     gpus[gpu_addr] = nil
+    devfs.bump()
 end
 
 local function scanHardware()
@@ -182,15 +197,26 @@ function console.openTTY(opts)
 
     local _close = ttyObj.close
     function ttyObj:close()
+        local meta = ttyRegistry[self]
+        if meta then meta.alive = false end
         entry.ttys[self] = nil
         ttyRegistry[self] = nil
         attached = {}
         invalidate()
+        devfs.bump()
         return _close(self)
     end
 
-    ttyRegistry[ttyObj] = { entry = entry, invalidate = invalidate, owner = opts.owner }
+    ttyRegistry[ttyObj] = {
+        name       = next_tty_name(),
+        owner      = opts.owner,
+        gpu        = gpu_addr,
+        entry      = entry,
+        invalidate = invalidate,
+        alive      = true,
+    }
     entry.ttys[ttyObj]  = true
+    devfs.bump()
 
     return ttyObj
 end
@@ -204,6 +230,17 @@ function console.gpus()
     local t = {}
     for addr, e in pairs(gpus) do t[addr] = e.proxy end
     return pairs(t)
+end
+
+function console.tys()
+    local list = {}
+    for ttyObj, meta in pairs(ttyRegistry) do
+        list[#list + 1] = { name = meta.name, tty = ttyObj }
+    end
+    table.sort(list, function(a, b)
+        return tonumber(a.name:match("%d+")) < tonumber(b.name:match("%d+"))
+    end)
+    return list
 end
 
 -- console.getInfo() is just a table of useful info
@@ -257,6 +294,102 @@ function console.getInfo()
     end
     return info
 end
+
+-- /dev/tty
+local function ttyFaces(ttyObj, meta)
+    local faces = {
+        tty = {
+            open = function(mode)
+                mode = mode or "r"
+                local bRead = mode:match("[ra]")
+                local bWrite = mode:match("[wa]")
+                if not (bRead or bWrite) then
+                    return nil, "invalid mode"
+                end
+                local handle = { close = function() return true end }
+                if bRead then
+                    handle.read = function(_, n)
+                        return ttyObj.reader:read(n)
+                    end
+                end
+                if bWrite then
+                    handle.write = function(_, value)
+                        if not meta.alive then return nil, "device lost" end
+                        return ttyObj:write(tostring(value))
+                    end
+                end
+                return handle
+            end
+        },
+        attributes = {
+            read = function()
+                local a = ttyObj.attributes
+                return table.concat({
+                    "echo=" .. tostring(a.echo),
+                    "line=" .. tostring(a.line),
+                    "raw=" .. tostring(a.raw),
+                    "cursor=" .. tostring(a.cursor),
+                    "xoff=" .. tostring(a.xoff),
+                }, " ")
+            end,
+            write = function(input)
+                for token in tostring(input or ""):gmatch("[^,%s]+") do
+                    local key, value = token:match("^([^=]+)=(.*)$")
+                    local on = value == "true" or value == "1" or value == "on"
+                    local off = value == "false" or value == "0" or value == "off"
+                    if not key or ttyObj.attributes[key] == nil or not (on or off) then
+                        return nil, "invalid attribute setting: " .. token
+                    end
+                    ttyObj.attributes[key] = on
+                end
+            end,
+        },
+        signal = {
+            write = function(input)
+                local name = (tostring(input or ""):gsub("%s", "")):upper()
+                local code = ({ INT = 3, TSTP = 26, KILL = 28 })[name]
+                if not code then return nil, "unknown signal" end
+                ttyObj:onKeyDown(code)
+            end,
+        },
+        info = {
+            read = function()
+                if not meta.alive or not gpus[meta.gpu] then return nil, "device lost" end
+                local ok, w, h = pcall(meta.entry.proxy.getResolution)
+                if not ok then return nil, "device lost" end
+                local pids = {}
+                for pid in pairs(ttyObj.attachedUids or {}) do
+                    pids[#pids + 1] = tostring(pid)
+                end
+                table.sort(pids)
+                return table.concat({
+                    "gpu " .. tostring(meta.gpu),
+                    "screen " .. tostring(meta.entry.screen),
+                    "resolution " .. tostring(w) .. "x" .. tostring(h),
+                    "pids " .. (#pids > 0 and table.concat(pids, ",") or "-"),
+                }, "\n")
+            end,
+        },
+    }
+    for _, face in pairs(faces) do
+        if type(face.read) == "function" then face.read = devfs.guard(face.read) end
+        if type(face.write) == "function" then face.write = devfs.guard(face.write) end
+    end
+    return faces
+end
+
+devfs.define("tty", function()
+    local faces = {}
+    for _, item in ipairs(console.tys()) do
+        local ttyObj = item.tty
+        faces[item.name] = { list = function()
+            local meta = ttyRegistry[ttyObj]
+            if not meta then return {} end
+            return ttyFaces(ttyObj, meta)
+        end }
+    end
+    return faces
+end)
 
 scanHardware()
 polaris.analytics.addEvent("console")

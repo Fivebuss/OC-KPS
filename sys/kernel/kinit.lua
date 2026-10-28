@@ -87,7 +87,7 @@ log("Registered module: component")
 
 -- devfs time
 polaris.devfs = require("devfs")
-filesystem.mount(polaris.devfs.proxy, "/dev")
+polaris.devfs.mount(polaris.config["devroot"] or "/dev")
 polaris.devfs.register(polaris.devfs.proxy)
 log("Registered module: devfs\ndevfs: mounted /dev")
 
