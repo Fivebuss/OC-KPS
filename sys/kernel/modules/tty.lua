@@ -119,9 +119,10 @@ local function cfg(key)
 end
 
 
-function tty.new(gpu)
+function tty.new(gpu, keyboard_addrs)
     local self = {
         gpu = gpu,
+        keyboard_addrs = keyboard_addrs,
 
         attributes = { echo = true, line = true, raw = false, cursor = true, xoff = false },
         disabled = {},     -- Disabled signal handling
@@ -955,11 +956,12 @@ function tty.new(gpu)
 
     -- A better event library
 
-    self.keyHandlerId = event.register(nil, function(sig, _addr, char, code)
+    self.keyHandlerId = event.register(nil, function(sig, kb_addr, char, code)
+        if self.keyboard_addrs and not self.keyboard_addrs[kb_addr] then return end
         if sig == "key_down" then
             self:onKeyDown(char, code)
         elseif sig == "clipboard" then
-            self:clipboard(code) -- clipboard signal's 3rd value is the pasted text
+            self:clipboard(code)
         end
     end, math.huge, math.huge)
 

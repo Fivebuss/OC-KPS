@@ -148,21 +148,7 @@ function console.openTTY(opts)
     end
 
     local gpuProxy, invalidate = makeGpuProxy(entry)
-    local ttyObj = polaris.tty.new(gpuProxy)
-
-    -- Now dont ask but overriding events here is because I cannot be arsed to tell tty "hey use this keyboard"
-    -- its simpler anyway lol
-
-    event.cancel(ttyObj.keyHandlerId)
-
-    ttyObj.keyHandlerId = event.register(nil, function(sig, kb_addr, a, b)
-        if not entry.keyboards[kb_addr] then return end
-        if sig == "key_down" then
-            ttyObj:onKeyDown(a, b)
-        elseif sig == "clipboard" then
-            ttyObj:clipboard(a)
-        end
-    end, math.huge, math.huge)
+    local ttyObj = polaris.tty.new(gpuProxy, entry.keyboards)
 
     local _attach = ttyObj.attach
     local _detach = ttyObj.detach

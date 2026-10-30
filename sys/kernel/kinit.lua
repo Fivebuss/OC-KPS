@@ -11,7 +11,7 @@ local filesystem = require("filesystem")
 polaris = {} -- global
 polaris.version = {}
 polaris.version.os = _G._OSVERSION
-polaris.version.kernel = "Polaris Kernel 0.1"
+polaris.version.kernel = "Polaris Kernel 0.2"
 _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
@@ -109,7 +109,7 @@ polaris.panic = function()
     polaris.gpu.fill(1, 1, w, h, " ")
 
     local y = 1
-    local w, h = 0, 0
+    --local w, h = 0, 0
     
     local function status(msg)
         msg = tostring(msg)
