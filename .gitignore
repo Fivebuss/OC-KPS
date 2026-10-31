@@ -2,3 +2,7 @@
 workspace/
 *.zip
 ref/
+/home/*
+!/home/root/
+/home/root/*
+!/home/root/.commitfile

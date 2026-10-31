@@ -1,3 +1,4 @@
+-- /bin/events.lua
 local event = require("event")
 local computer = require("computer")
 

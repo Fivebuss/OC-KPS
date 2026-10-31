@@ -1,3 +1,4 @@
+-- /bin/gc.lua
 -- Borrowed from openOS
 local event = require("event")
 local total = computer.totalMemory()
