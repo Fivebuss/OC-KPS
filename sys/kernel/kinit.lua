@@ -8,6 +8,15 @@ local component = require("component")
 local package = require("package")
 local filesystem = require("filesystem")
 
+do
+    local bundle = dofile("/sys/kernel/kmodules.lua")
+    for name, src in pairs(bundle) do
+        package.preload[name] = function()
+            return assert(load(src, "=" .. name, "bt", _G))()
+        end
+    end
+end
+
 polaris = {} -- global
 polaris.version = {}
 polaris.version.os = _G._OSVERSION
@@ -81,7 +90,7 @@ log("Registered module: tty")
 for c, t in component.list() do
     computer.pushSignal("component_added", c, t)
 end
-dofile("sys/kernel/modules/component.lua")
+dofile("/sys/kernel/modules/component.lua")
 package.loaded["component"] = component
 log("Registered module: component")
 

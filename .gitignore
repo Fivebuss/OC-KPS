@@ -6,3 +6,5 @@ ref/
 !/home/root/
 /home/root/*
 !/home/root/.commitfile
+/boot/bootscripts.lua
+/sys/kernel/kmodules.lua

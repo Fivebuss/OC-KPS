@@ -72,7 +72,6 @@ local EVENTS = {
     { "kinit_start", "kinit start" },
     { "kinit_end", "kinit end" },
     { "stage2", "stage 2" },
-    { "ksh", "ksh" },
     { "console", "console" },
 }
 
