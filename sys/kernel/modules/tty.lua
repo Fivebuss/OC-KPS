@@ -761,6 +761,22 @@ function tty.new(gpu, keyboard_addrs)
         return self.attributes.cursor
     end
 
+    function self:setResolution(w, h)
+        if self.attributes.cursor then eraseCursor(self) end
+        local ok = self.gpu.setResolution(w, h)
+        if not ok then
+            if self.attributes.cursor then drawCursor(self) end
+            return false
+        end
+        self.w, self.h = w, h
+        self.cx, self.cy = 1, 1
+        self.cursorSaved = nil
+        self.gpu.fill(1, 1, self.w, self.h, " ")
+        syncCursor(self)
+        if self.attributes.cursor then drawCursor(self) end
+        return true
+    end
+
     -- Readline can now do stuff without stealing event handlers, imagine that
     function self:setDiscipline(disc)
         self.discipline = disc

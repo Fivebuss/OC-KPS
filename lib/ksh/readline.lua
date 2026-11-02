@@ -95,9 +95,18 @@ function readline:read(skipPromptDraw)
 	if session.clearInput then session:clearInput() end
 	local prompt = self:promptString()
 
-	if not skipPromptDraw then
-		session:write_str(prompt)
-		if session.flush then session:flush() end
+	-- Fix multi-line
+	local width, _ = session:getSize()
+	if type(width) ~= "number" or width <= 0 then
+		width = 80
+	end
+	local promptW = displayWidth(prompt)
+
+	local curRelRow = 1
+	local curRelCol = 1
+
+	local function relPos(contentW)
+		return math.floor(contentW / width) + 1, (contentW % width) + 1
 	end
 
 	local buf = {}
@@ -108,12 +117,31 @@ function readline:read(skipPromptDraw)
 	local resultLine = nil
 	local done = false
 
+	if not skipPromptDraw then
+		session:write_str(prompt)
+		if session.flush then session:flush() end
+	end
+	curRelRow, curRelCol = relPos(promptW)
+
 	local function redrawLine()
 		local line = table.concat(buf)
-		local suffix = table.concat(buf, "", pos + 1)
-		local suffixW = displayWidth(suffix)
-		session:write_str("\r" .. prompt .. line .. "\27[K")
-		cursorLeft(session, suffixW)
+		local prefixW = displayWidth(table.concat(buf, "", 1, pos))
+		local suffixW = displayWidth(table.concat(buf, "", pos + 1))
+		local contentW = promptW + prefixW
+		local targetRow, targetCol = relPos(contentW)
+
+		local out = { "\27[G" }
+		if curRelRow > 1 then
+			out[#out + 1] = "\27[" .. (curRelRow - 1) .. "A"
+		end
+		out[#out + 1] = "\27[J"
+		out[#out + 1] = prompt
+		out[#out + 1] = line
+		if suffixW > 0 then
+			out[#out + 1] = "\27[" .. suffixW .. "D"
+		end
+		session:write_str(table.concat(out))
+		curRelRow, curRelCol = targetRow, targetCol
 	end
 
 	local function resetHistoryNavigation()
@@ -206,12 +234,14 @@ function readline:read(skipPromptDraw)
 					local ch = buf[pos]
 					pos = pos - 1
 					cursorLeft(session, displayWidth(ch))
+					curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
 				end
 			elseif code == 205 then -- right arrow
 				if pos < #buf then
 					local ch = buf[pos + 1]
 					pos = pos + 1
 					cursorRight(session, displayWidth(ch))
+					curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
 				end
 			elseif code == 211 then -- delete
 				if pos < #buf then
@@ -279,6 +309,7 @@ function readline:read(skipPromptDraw)
 
 		if pos == #buf then
 			session:write_str(ch)
+			curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
 		else
 			redrawLine()
 		end

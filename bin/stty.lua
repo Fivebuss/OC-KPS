@@ -1,76 +1,186 @@
 -- /bin/stty.lua
--- No console driver yet but its fine. 
--- Hang on, whats that? A week later there is one? And its compatible now? Miracle, I dont even need to touch this or tty module
--- Worlds worse elseif spam. AI made this, I am not clinically insane
+
+local filesystem = require("filesystem")
 
 local args = { ... }
-local tty = _G.ctty
 
-if not tty then
-    io.stderr:writeln("stty: ctty unavailable in environment!")
-    os.exit(1)
-    return false
+-- Support /dev/tty<whatever>
+local ttyDev = nil
+local argStart = 1
+if #args > 0 then
+    local first = args[1]
+    if first:match("^/dev/tty%d+$") then
+        ttyDev = first
+        argStart = 2
+    elseif first:match("^tty%d+$") then
+        ttyDev = "/dev/" .. first
+        argStart = 2
+    end
+end
+
+local tty = _G.ctty
+local attrPath = ttyDev and (ttyDev .. "/attributes") or nil
+
+-- Get /dev/ttyN/attributes
+local function attrRead()
+    if not attrPath then return nil end
+    local h, why = filesystem.open(attrPath, "r")
+    if not h then return nil, why end
+    local parts = {}
+    while true do
+        local chunk = h:read(2048)
+        if not chunk then break end
+        parts[#parts + 1] = chunk
+    end
+    h:close()
+    return table.concat(parts)
+end
+
+-- send stuff to them
+local function attrWrite(str)
+    if not attrPath then return false end
+    local h, why = filesystem.open(attrPath, "w")
+    if not h then return false, why end
+    h:write(str)
+    h:close()
+    return true
+end
+
+-- make it a real attribute
+local function parseAttrs(str)
+    local out = {}
+    for tok in tostring(str or ""):gmatch("[^,%s]+") do
+        local k, v = tok:match("^([^=]+)=(.*)$")
+        if k and v then out[k] = v end
+    end
+    return out
+end
+
+-- Get resolution from /dev
+local function getResolution()
+    if attrPath then
+        local data, why = attrRead()
+        if not data then return 0, 0 end
+        local t = parseAttrs(data)
+        local res = t.resolution
+        if res then
+            local w, h = res:match("^(%d+)x(%d+)$")
+            if w and h then return tonumber(w), tonumber(h) end
+        end
+        return 0, 0
+    end
+    if tty then return tty.w, tty.h end
+    return 0, 0
+end
+
+local parsedArgs = {}
+for i = argStart, #args do
+    parsedArgs[#parsedArgs + 1] = args[i]
+end
+args = parsedArgs
+
+local attrOps = {}
+
+local function setAttr(key, val)
+    if attrPath then
+        attrOps[#attrOps + 1] = key .. "=" .. tostring(val)
+    elseif tty then
+        tty.attributes[key] = val
+    end
 end
 
 if #args == 0 or args[1] == "-a" or args[1] == "all" then
-    io.writeln(string.format(
-        "resolution %dx%d;\necho=%s; line=%s; raw=%s; cursor=%s; xoff=%s;\ndisabled signals: ^C=%s, ^Z=%s, ^D=%s",
-        tty.w, tty.h,
-        tostring(tty.attributes.echo),
-        tostring(tty.attributes.line),
-        tostring(tty.attributes.raw),
-        tostring(tty.attributes.cursor),
-        tostring(tty.attributes.xoff),
-        tostring(tty.disabled.C or false),
-        tostring(tty.disabled.Z or false),
-        tostring(tty.disabled.D or false)
-    ))
+    local w, h = getResolution()
+    if attrPath then
+        local data, why = attrRead()
+        if data then
+            io.writeln(data)
+        else
+            io.stderr:writeln("stty: cannot read attributes: " .. tostring(why))
+            os.exit(1)
+        end
+    else
+        io.writeln(string.format(
+            "resolution %dx%d;\necho=%s; line=%s; raw=%s; cursor=%s; xoff=%s;\ndisabled signals: ^C=%s, ^Z=%s, ^D=%s",
+            w, h,
+            tostring(tty.attributes.echo),
+            tostring(tty.attributes.line),
+            tostring(tty.attributes.raw),
+            tostring(tty.attributes.cursor),
+            tostring(tty.attributes.xoff),
+            tostring(tty.disabled.C or false),
+            tostring(tty.disabled.Z or false),
+            tostring(tty.disabled.D or false)
+        ))
+    end
     os.exit(0)
 end
 
 for _, arg in ipairs(args) do
     if arg == "sane" then
-        tty.attributes.echo = true
-        tty.attributes.line = true
-        tty.attributes.raw = false
-        tty.attributes.xoff = false
-        tty:setCursor(true)
-        tty.disabled = {}
+        if attrPath then
+            attrOps[#attrOps + 1] = "echo=true"
+            attrOps[#attrOps + 1] = "line=true"
+            attrOps[#attrOps + 1] = "raw=false"
+            attrOps[#attrOps + 1] = "xoff=false"
+            attrOps[#attrOps + 1] = "cursor=true"
+        elseif tty then
+            tty.attributes.echo = true
+            tty.attributes.line = true
+            tty.attributes.raw = false
+            tty.attributes.xoff = false
+            tty:setCursor(true)
+            tty.disabled = {}
+        end
     elseif arg == "size" then
-        io.writeln(string.format("%d %d", tty.h, tty.w))
+        local w, h = getResolution()
+        io.writeln(string.format("%d %d", h, w))
     elseif arg == "echo" then
-        tty.attributes.echo = true
+        setAttr("echo", true)
     elseif arg == "-echo" then
-        tty.attributes.echo = false
+        setAttr("echo", false)
     elseif arg == "line" then
-        tty.attributes.line = true
+        setAttr("line", true)
     elseif arg == "-line" then
-        tty.attributes.line = false
+        setAttr("line", false)
     elseif arg == "raw" then
-        tty.attributes.raw = true
+        setAttr("raw", true)
     elseif arg == "-raw" then
-        tty.attributes.raw = false
+        setAttr("raw", false)
     elseif arg == "cursor" then
-        tty:setCursor(true)
+        setAttr("cursor", true)
     elseif arg == "-cursor" then
-        tty:setCursor(false)
+        setAttr("cursor", false)
     elseif arg == "xoff" then
-        tty.attributes.xoff = true
+        setAttr("xoff", true)
     elseif arg == "-xoff" then
-        tty.attributes.xoff = false
+        setAttr("xoff", false)
+    elseif arg:sub(1, 11) == "resolution=" then
+        local w, h = arg:match("^resolution=(%d+)x(%d+)$")
+        if w and h then
+            if attrPath then
+                attrOps[#attrOps + 1] = "resolution=" .. w .. "x" .. h
+            elseif tty then
+                tty:setResolution(tonumber(w), tonumber(h))
+            end
+        end
     elseif arg == "intr" then
-        tty.disabled.C = false
+        if tty then tty.disabled.C = false end
     elseif arg == "-intr" then
-        tty.disabled.C = true
+        if tty then tty.disabled.C = true end
     elseif arg == "susp" then
-        tty.disabled.Z = false
+        if tty then tty.disabled.Z = false end
     elseif arg == "-susp" then
-        tty.disabled.Z = true
+        if tty then tty.disabled.Z = true end
     elseif arg == "eof" then
-        tty.disabled.D = false
+        if tty then tty.disabled.D = false end
     elseif arg == "-eof" then
-        tty.disabled.D = true
+        if tty then tty.disabled.D = true end
     end
+end
+
+if attrPath and #attrOps > 0 then
+    attrWrite(table.concat(attrOps, " "))
 end
 
 os.exit(0)

@@ -281,6 +281,19 @@ function console.getInfo()
     return info
 end
 
+function console.setResolution(w, h)
+    local ok = false
+    for _, entry in pairs(gpus) do
+        if entry.proxy.setResolution(w, h) then
+            for ttyObj in pairs(entry.ttys) do
+                pcall(ttyObj.setResolution, ttyObj, w, h)
+            end
+            ok = true
+        end
+    end
+    return ok
+end
+
 -- /dev/tty
 local function ttyFaces(ttyObj, meta)
     local faces = {
@@ -310,23 +323,38 @@ local function ttyFaces(ttyObj, meta)
         attributes = {
             read = function()
                 local a = ttyObj.attributes
+                local ok, w, h = pcall(meta.entry.proxy.getResolution)
+                if not ok then w, h = 0, 0 end
                 return table.concat({
                     "echo=" .. tostring(a.echo),
                     "line=" .. tostring(a.line),
                     "raw=" .. tostring(a.raw),
                     "cursor=" .. tostring(a.cursor),
                     "xoff=" .. tostring(a.xoff),
+                    "resolution=" .. tostring(w) .. "x" .. tostring(h),
                 }, " ")
             end,
             write = function(input)
                 for token in tostring(input or ""):gmatch("[^,%s]+") do
                     local key, value = token:match("^([^=]+)=(.*)$")
-                    local on = value == "true" or value == "1" or value == "on"
-                    local off = value == "false" or value == "0" or value == "off"
-                    if not key or ttyObj.attributes[key] == nil or not (on or off) then
+                    if key == "resolution" then
+                        local w, h = value:match("^(%d+)x(%d+)$")
+                        if not w or not h then
+                            return nil, "invalid resolution: " .. tostring(value)
+                        end
+                        if not console.setResolution(tonumber(w), tonumber(h)) then
+                            return nil, "failed to set resolution"
+                        end
+                    elseif not key or ttyObj.attributes[key] == nil then
                         return nil, "invalid attribute setting: " .. token
+                    else
+                        local on = value == "true" or value == "1" or value == "on"
+                        local off = value == "false" or value == "0" or value == "off"
+                        if not on and not off then
+                            return nil, "invalid attribute setting: " .. token
+                        end
+                        ttyObj.attributes[key] = on
                     end
-                    ttyObj.attributes[key] = on
                 end
             end,
         },
@@ -358,8 +386,8 @@ local function ttyFaces(ttyObj, meta)
         },
     }
     for _, face in pairs(faces) do
-        if type(face.read) == "function" then face.read = devfs.guard(face.read) end
-        if type(face.write) == "function" then face.write = devfs.guard(face.write) end
+        if type(face.read) == "function" then face.read = devfs.prepare(face.read) end
+        if type(face.write) == "function" then face.write = devfs.prepare(face.write) end
     end
     return faces
 end

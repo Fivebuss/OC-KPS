@@ -1,21 +1,11 @@
 ---@diagnostic disable: lowercase-global
 -- Sets up "polaris" kernel I didnt have a better name
 package.path =
-"/lib/?.lua;/lib/?/init.lua;/lib/?/?.lua;/usr/lib/?.lua;/usr/lib/?/init.lua;/usr/lib/?/?.lua;/home/lib/?.lua;/home/lib/?/init.lua;/home/lib/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;/sys/kernel/modules/?.lua"
-
+"/lib/?.lua;/lib/?/init.lua;/lib/?/?.lua;/usr/lib/?.lua;/usr/lib/?/init.lua;/usr/lib/?/?.lua;/home/lib/?.lua;/home/lib/?/init.lua;/home/lib/?/?.lua;/home/?.lua;/home/?/init.lua;/home/?/?.lua;./?.lua;./?/init.lua;./?/?.lua;/sys/kernel/modules/?.lua"
 local event_internals = require("event_internals")
 local component = require("component")
 local package = require("package")
 local filesystem = require("filesystem")
-
-do
-    local bundle = dofile("/sys/kernel/kmodules.lua")
-    for name, src in pairs(bundle) do
-        package.preload[name] = function()
-            return assert(load(src, "=" .. name, "bt", _G))()
-        end
-    end
-end
 
 polaris = {} -- global
 polaris.version = {}
@@ -25,12 +15,8 @@ _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
 polaris.analytics = { boot = {} }
-local debugMode = polaris.config["debug"]
 
 status(polaris.version.kernel .. ": kinit exec, setting up kernel")
-if debugMode then
-    _G.status = nil
-end
 
 function polaris.analytics.addEvent(name)
     polaris.analytics.boot[name] = { uptime = computer.uptime(), clock = os.clock() }
@@ -38,15 +24,35 @@ end
 
 polaris.analytics.addEvent("kinit_start")
 
--- This is now just a boot gpu
-polaris.gpu = gpu
-if debugMode ~= true then
-    _G.gpu = nil
+-- Load config
+do
+    local path = "/boot/polaris/kconfig.cfg"
+    local cfg = dofile(path)
+
+    if type(cfg) ~= "table" then
+        error("Config file must return table: " .. path)
+    end
+
+    polaris.config = cfg
 end
 
--- Load config
+local debugMode = polaris.config["debug"]
 
-require("config")()
+-- Load compiled kmodules
+do
+    local bundle = dofile("/sys/kernel/kmodules.lua")
+    for name, src in pairs(bundle) do
+        local chunk, err = load(src, "=" .. name, "bt", _G)
+
+        if not chunk then
+            error("Failed to compile module " .. name .. ": " .. err)
+        end
+
+        package.preload[name] = function()
+            return chunk()
+        end
+    end
+end
 
 -- Buffer and io
 polaris.buffer = require("buffer")
@@ -90,9 +96,6 @@ log("Registered module: tty")
 for c, t in component.list() do
     computer.pushSignal("component_added", c, t)
 end
-dofile("/sys/kernel/modules/component.lua")
-package.loaded["component"] = component
-log("Registered module: component")
 
 -- devfs time
 polaris.devfs = require("devfs")
@@ -101,7 +104,7 @@ polaris.devfs.register(polaris.devfs.proxy)
 log("Registered module: devfs\ndevfs: mounted devfs to /dev")
 polaris.procfs = require("procfs")
 polaris.procfs.register(polaris.devfs)
-filesystem.mount(filesystem.internal.proxy("/dev/proc", {bind = true}), "/proc")
+filesystem.mount(filesystem.internal.proxy("/dev/proc", { bind = true }), "/proc")
 log("Registered module: procfs\nprocfs: mounted procfs to /dev/proc and /proc")
 
 -- Mount tmp
@@ -119,7 +122,7 @@ polaris.panic = function()
 
     local y = 1
     --local w, h = 0, 0
-    
+
     local function status(msg)
         msg = tostring(msg)
 

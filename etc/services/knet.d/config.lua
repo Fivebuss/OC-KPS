@@ -4,7 +4,7 @@ return {
     label = "knetd",
     priority = 200,
     onExit = "stop",
-    autostart = true,
+    autostart = false,
     restartDelay = 5,
     stopTimeout = 5,
     resetLog = false,
