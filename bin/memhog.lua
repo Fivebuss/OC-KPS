@@ -85,19 +85,47 @@ while maxMode or allocated < target do
     local ok, result = pcall(allocateChunk, count)
     coroutine.yield()
 
-    if not ok then
-        io.stderr:write(
-            "Allocation failed after ~"
-            .. tostring(allocated) .. " bytes\n"
-        )
 
-        if verbose then
-            io.stderr:write("Error: " .. tostring(result) .. "\n")
+    local iterations = 0
+
+    while maxMode or allocated < target do
+        local count = ENTRIES_PER_CHUNK
+
+        if not maxMode then
+            count = math.min(
+                ENTRIES_PER_CHUNK,
+                math.max(1, math.ceil(
+                    (target - allocated) / (ENTRY_OVERHEAD + CHUNK_SIZE)
+                ))
+            )
         end
 
-        os.exit(0)
-        return
+        iterations = iterations + 1
+
+        local ok, result = pcall(allocateChunk, count)
+        coroutine.yield()
+
+        if not ok then
+            io.stderr:write(
+                "memhog: failed after "
+                .. tostring(iterations)
+                .. " iterations, ~"
+                .. tostring(allocated)
+                .. " bytes\n"
+            )
+
+            if verbose then
+                io.stderr:write("Error: " .. tostring(result) .. "\n")
+            end
+
+            os.exit(0)
+            return
+        end
+
+        allocations[#allocations + 1] = result
+        allocated = allocated + estimateChunk(count)
     end
+
 
     allocations[#allocations + 1] = result
     allocated = allocated + estimateChunk(count)

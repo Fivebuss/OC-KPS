@@ -18,7 +18,7 @@ local function open(opts)
 	-- Output
 	function session:write(...) return tty:write(...) end
 	function session:writeln(...) return tty:writeln(...) end
-	function session:write_str(str, ...) return tty:write_str(str, ...) end
+	function session:write_str(str, ...) return tty:writeStr(str, ...) end
 	function session:flush() return tty:flush() end
 
 	-- Input

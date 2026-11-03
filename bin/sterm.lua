@@ -1,4 +1,6 @@
--- /bin/stty.lua
+-- /bin/sterm.lua
+-- As tty and term are still pretty linked I just combined some jobs together
+-- This makes life ALOT easier since you dont really interact with term directly
 
 local filesystem = require("filesystem")
 

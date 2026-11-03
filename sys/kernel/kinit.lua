@@ -38,7 +38,7 @@ end
 
 local debugMode = polaris.config["debug"]
 
--- Load compiled kmodules
+--Load compiled kmodules
 do
     local bundle = dofile("/sys/kernel/kmodules.lua")
     for name, src in pairs(bundle) do
@@ -96,6 +96,11 @@ log("Registered module: tty")
 for c, t in component.list() do
     computer.pushSignal("component_added", c, t)
 end
+
+-- Turns out this IS needed
+dofile("sys/kernel/modules/component.lua")
+package.loaded["component"] = component
+log("Registered module: component")
 
 -- devfs time
 polaris.devfs = require("devfs")

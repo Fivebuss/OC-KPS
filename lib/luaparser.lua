@@ -3708,6 +3708,7 @@ do
 	end
 end
 
+---@diagnostic disable-next-line: lowercase-global
 parser = {
 	--
 	-- Functions.
