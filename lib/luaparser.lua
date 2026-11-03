@@ -96,8 +96,6 @@ local OPERATOR_PRECEDENCE = {
 	["^"] = 12,
 }
 
-local EXPRESSION_NODES    = newSet { "binary", "call", "function", "identifier", "literal", "lookup", "table", "unary", "vararg" }
-local STATEMENT_NODES     = newSet { "assignment", "block", "break", "call", "declaration", "for", "goto", "if", "label", "repeat", "return", "while" }
 
 local TOKEN_BYTES         = {
 	NAME_START      = newCharSet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_",
@@ -121,23 +119,29 @@ local NUMERAL_PATTERNS    = {
 	DEC_EXP      = stringGsub("^(        %d+  %.?     [Ee][-+]?%d+   )", " +", ""),
 	DEC          = stringGsub("^(        %d+  %.?                    )", " +", ""),
 }
-local nextSerialNumber    = 1
 
 
 
 -- :NodeFields
 
+local NODE_PARENT    = 1
+local NODE_CONTAINER = 2
+local NODE_KEY       = 3
+local NODE_TOKEN     = 4
+
+local TOKEN_SOURCEPATH    = 1
+local TOKEN_LINESTART     = 2
+local TOKEN_LINEEND       = 3
+local TOKEN_POSITIONSTART = 4
+local TOKEN_POSITIONEND   = 5
+
 local function populateCommonNodeFields(token, node)
 	-- All nodes have these fields.
-	node.id           = nextSerialNumber
-	nextSerialNumber  = nextSerialNumber + 1
+	node.sourcePath   = token and token[TOKEN_SOURCEPATH] or "?"
 
-	node.sourceString = token and token.sourceString or ""
-	node.sourcePath   = token and token.sourcePath or "?"
-
-	node.token        = token
-	node.line         = token and token.lineStart or 0
-	node.position     = token and token.positionStart or 0
+	node[NODE_TOKEN] = token
+	node.line         = token and token[TOKEN_LINESTART] or 0
+	node.position     = token and token[TOKEN_POSITIONSTART] or 0
 
 	-- These fields are set by updateReferences():
 	-- node.parent    = nil -- Refers to the node's parent in the tree.
@@ -155,154 +159,229 @@ end
 -- AST expressions.
 local function AstIdentifier(token, name)
 	return populateCommonNodeFields(token, {
+		false, false, false, false,
 		type        = "identifier",
 		name        = name, -- String.
 		attribute   = "", -- "" | "close" | "const"  -- Only used in declarations.
-		declaration = nil, -- AstIdentifier (whose parent is an AstDeclaration, AstFunction or AstFor). Updated by updateReferences(). This is nil for globals.
+		declaration = false, -- AstIdentifier (whose parent is an AstDeclaration, AstFunction or AstFor). Updated by updateReferences(). This is nil for globals.
+		sourcePath  = "",
+		line        = 0,
+		position    = 0,
 	})
 end
 local function AstVararg(token)
 	return populateCommonNodeFields(token, {
+		false, false, false, false,
 		type        = "vararg",
-		declaration = nil, -- AstVararg (whose parent is an AstFunction). Updated by updateReferences(). This is nil in the main chunk (or in a non-vararg function, which is probably an error).
+		declaration = false, -- AstVararg (whose parent is an AstFunction). Updated by updateReferences(). This is nil in the main chunk (or in a non-vararg function, which is probably an error).
 		adjustToOne = false, -- True if parentheses surround the vararg.
+		sourcePath  = "",
+		line        = 0,
+		position    = 0,
 	})
 end
 local function AstLiteral(token, v)
 	return populateCommonNodeFields(token, {
-		type  = "literal",
-		value = v, -- Number, string, boolean or nil.
+		false, false, false, false,
+		type       = "literal",
+		value      = v, -- Number, string, boolean or nil.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstTable(token)
 	return populateCommonNodeFields(token, {
-		type   = "table",
-		fields = {}, -- Array of {key=expression, value=expression, generatedKey=bool}. generatedKey is true for implicit keys (i.e. {x,y}) and false for explicit keys (i.e. {a=x,b=y}). Note that the state of generatedKey affects the output of toLua()! 'key' may be nil if generatedKey is true.
+		false, false, false, false,
+		type       = "table",
+		fields     = {}, -- Array of {key=expression, value=expression, generatedKey=bool}. generatedKey is true for implicit keys (i.e. {x,y}) and false for explicit keys (i.e. {a=x,b=y}). Note that the state of generatedKey affects the output of toLua()! 'key' may be nil if generatedKey is true.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstLookup(token)
 	return populateCommonNodeFields(token, {
-		type   = "lookup",
-		object = nil, -- Expression.
-		member = nil, -- Expression.
+		false, false, false, false,
+		type       = "lookup",
+		object     = false, -- Expression.
+		member     = false, -- Expression.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstUnary(token, op)
 	return populateCommonNodeFields(token, {
+		false, false, false, false,
 		type       = "unary",
 		operator   = op, -- "-" | "not" | "#" | "~"
-		expression = nil, -- Expression.
+		expression = false, -- Expression.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstBinary(token, op)
 	return populateCommonNodeFields(token, {
-		type     = "binary",
-		operator = op, -- "+" | "-" | "*" | "/" | "//" | "^" | "%" | "&" | "~" | "|" | ">>" | "<<" | ".." | "<" | "<=" | ">" | ">=" | "==" | "~=" | "and" | "or"
-		left     = nil, -- Expression.
-		right    = nil, -- Expression.
+		false, false, false, false,
+		type       = "binary",
+		operator   = op, -- "+" | "-" | "*" | "/" | "//" | "^" | "%" | "&" | "~" | "|" | ">>" | "<<" | ".." | "<" | "<=" | ">" | ">=" | "==" | "~=" | "and" | "or"
+		left       = false, -- Expression.
+		right      = false, -- Expression.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstCall(token)
 	return populateCommonNodeFields(token, { -- Calls can be both expressions and statements.
+		false, false, false, false,
 		type        = "call",
-		callee      = nil,                -- Expression.
+		callee      = false,              -- Expression.
 		arguments   = {},                 -- Array of expressions.
 		method      = false,              -- True if the call is a method call. Method calls must have a callee that is a lookup with a member expression that is a string literal that can pass as an identifier.
 		adjustToOne = false,              -- True if parentheses surround the call.
+		sourcePath  = "",
+		line        = 0,
+		position    = 0,
 	})
 end
 local function AstFunction(token)
 	return populateCommonNodeFields(token, {
+		false, false, false, false,
 		type       = "function",
 		parameters = {}, -- Array of AstIdentifier and maybe an AstVararg at the end.
-		body       = nil, -- AstBlock.
+		body       = false, -- AstBlock.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 
 -- AST statements.
 local function AstBreak(token)
 	return populateCommonNodeFields(token, {
-		type = "break",
+		false, false, false, false,
+		type       = "break",
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstReturn(token)
 	return populateCommonNodeFields(token, {
-		type   = "return",
-		values = {}, -- Array of expressions.
+		false, false, false, false,
+		type       = "return",
+		values     = {}, -- Array of expressions.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstLabel(token, name)
 	return populateCommonNodeFields(token, {
-		type = "label",
-		name = name, -- String. The value must be able to pass as an identifier.
+		false, false, false, false,
+		type       = "label",
+		name       = name, -- String. The value must be able to pass as an identifier.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstGoto(token, name)
 	return populateCommonNodeFields(token, {
-		type  = "goto",
-		name  = name, -- String. The value must be able to pass as an identifier.
-		label = nil, -- AstLabel. Updated by updateReferences().
+		false, false, false, false,
+		type       = "goto",
+		name       = name, -- String. The value must be able to pass as an identifier.
+		label      = false, -- AstLabel. Updated by updateReferences().
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstBlock(token)
 	return populateCommonNodeFields(token, {
+		false, false, false, false,
 		type       = "block",
 		statements = {}, -- Array of statements.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstDeclaration(token)
 	return populateCommonNodeFields(token, {
-		type   = "declaration",
-		names  = {}, -- Array of AstIdentifier.
-		values = {}, -- Array of expressions.
+		false, false, false, false,
+		type       = "declaration",
+		names      = {}, -- Array of AstIdentifier.
+		values     = {}, -- Array of expressions.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstAssignment(token)
 	return populateCommonNodeFields(token, {
-		type    = "assignment",
-		targets = {}, -- Mixed array of AstIdentifier and AstLookup.
-		values  = {}, -- Array of expressions.
+		false, false, false, false,
+		type       = "assignment",
+		targets    = {}, -- Mixed array of AstIdentifier and AstLookup.
+		values     = {}, -- Array of expressions.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstIf(token)
 	return populateCommonNodeFields(token, {
-		type      = "if",
-		condition = nil, -- Expression.
-		bodyTrue  = nil, -- AstBlock.
-		bodyFalse = nil, -- AstBlock or nil.
+		false, false, false, false,
+		type       = "if",
+		condition  = false, -- Expression.
+		bodyTrue   = false, -- AstBlock.
+		bodyFalse  = false, -- AstBlock or nil.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstWhile(token)
 	return populateCommonNodeFields(token, {
-		type      = "while",
-		condition = nil, -- Expression.
-		body      = nil, -- AstBlock.
+		false, false, false, false,
+		type       = "while",
+		condition  = false, -- Expression.
+		body       = false, -- AstBlock.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstRepeat(token)
 	return populateCommonNodeFields(token, {
-		type      = "repeat",
-		body      = nil, -- AstBlock.
-		condition = nil, -- Expression.
+		false, false, false, false,
+		type       = "repeat",
+		body       = false, -- AstBlock.
+		condition  = false, -- Expression.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 local function AstFor(token, kind)
 	return populateCommonNodeFields(token, {
-		type   = "for",
-		kind   = kind, -- "numeric" | "generic"
-		names  = {}, -- Array of AstIdentifier.
-		values = {}, -- Array of expressions.
-		body   = nil, -- AstBlock.
+		false, false, false, false,
+		type       = "for",
+		kind       = kind, -- "numeric" | "generic"
+		names      = {}, -- Array of AstIdentifier.
+		values     = {}, -- Array of expressions.
+		body       = false, -- AstBlock.
+		sourcePath = "",
+		line       = 0,
+		position   = 0,
 	})
 end
 
 local function Stats()
 	return {
-		-- simplify() and optimize():
-		nodeReplacements   = { --[[ location1, ... ]] },
-		nodeRemovals       = { --[[ location1, ... ]] },
-		nodeRemoveCount    = 0,
-
 		-- minify():
 		renameCount        = 0,
 		generatedNameCount = 0,
@@ -436,14 +515,14 @@ do
 end
 
 local function formatMessageAtToken(prefix, token, agent, s, ...)
-	return (formatMessageInFile(prefix, (token and token.sourceString or ""), (token and token.sourcePath or "?"), (token and token.positionStart or 0), agent, s, ...))
+	return (formatMessageInFile(prefix, (token and token.sourceString or ""), (token and token[TOKEN_SOURCEPATH] or "?"), (token and token[TOKEN_POSITIONSTART] or 0), agent, s, ...))
 end
 local function formatMessageAfterToken(prefix, token, agent, s, ...)
-	return (formatMessageInFile(prefix, (token and token.sourceString or ""), (token and token.sourcePath or "?"), (token and token.positionEnd + 1 or 0), agent, s, ...))
+	return (formatMessageInFile(prefix, (token and token.sourceString or ""), (token and token[TOKEN_SOURCEPATH] or "?"), (token and token[TOKEN_POSITIONEND] + 1 or 0), agent, s, ...))
 end
 
 local function formatMessageAtNode(prefix, node, agent, s, ...)
-	return (formatMessageInFile(prefix, node.sourceString, node.sourcePath, node.position, agent, s, ...))
+	return (formatMessageInFile(prefix, node.sourceString or "", node.sourcePath, node.position, agent, s, ...))
 end
 
 local function formatErrorInFile(...) return formatMessageInFile("Error", ...) end
@@ -499,8 +578,8 @@ end
 
 -- text = getRelativeLocationTextForToken( tokens, tokenOfInterest, otherToken )
 local function getRelativeLocationTextForToken(tokens, tokOfInterest, otherTok)
-	return getRelativeLocationText((tokens[tokOfInterest] and tokens[tokOfInterest].lineStart or 0),
-		(tokens[otherTok] and tokens[otherTok].lineStart or 0))
+	return getRelativeLocationText((tokens[tokOfInterest] and tokens[tokOfInterest][TOKEN_LINESTART] or 0),
+		(tokens[otherTok] and tokens[otherTok][TOKEN_LINESTART] or 0))
 end
 local function formatNumber(n)
 	-- @Speed: Cache!
@@ -542,6 +621,12 @@ end
 local tokenize
 do
 	local ERROR_UNFINISHED_VALUE = {}
+
+	-- Constant quote-stop patterns for the quoted-string branch (were built with string
+	-- concatenation inside the tokenizer loop - pure per-token garbage).
+	-- Character classes: { quote, backslash, newline }.
+	local PAT_STRING_STOP_DOUBLE = "[\"\\\n]"
+	local PAT_STRING_STOP_SINGLE = "['\\\n]"
 
 	-- success, equalSignCountIfLong|errorCode, ptr = parseStringlikeToken( s, ptr )
 	local function parseStringlikeToken(s, ptr)
@@ -754,17 +839,11 @@ do
 					count         = count + 1
 
 					tokens[count] = {
+						path, lnStart, ln, i1, i2,
 						type           = "whitespace",
 						value          = tokRepr,
-						representation = tokRepr,
 
 						sourceString   = s,
-						sourcePath     = path,
-
-						lineStart      = lnStart,
-						lineEnd        = ln,
-						positionStart  = i1,
-						positionEnd    = i2,
 					}
 				else
 					ln = ln + countSubString(s, i1, i2, "\n", true)
@@ -815,12 +894,21 @@ do
 					end
 				end
 
-				tokType  = "comment"
-				tokRepr  = stringSub(s, ptrStart, ptr - 1)
-				tokRepr  = equalSignCountIfLong and tokRepr or
-					(stringFind(tokRepr, "\n$") and tokRepr or tokRepr .. "\n") -- Make sure there's a newline at the end of single-line comments. (It may be missing if we've reached EOF.)
-				tokValue = equalSignCountIfLong and stringSub(tokRepr, 5 + equalSignCountIfLong, -3 -
-					equalSignCountIfLong) or stringSub(tokRepr, 3, -2)
+				-- RAM separates: Comment tokens are only materialized when keepWhitespaceTokens
+				-- is set. They are never needed by the parser itself, and every comment would
+				-- otherwise cost a token table plus two substring allocations. Line counting
+				-- below still runs over the comment span, so relative line checks that depend
+				-- on comment lines (such as the ambiguous '( call after newline') stay correct.
+				if keepWhitespaceTokens then
+					tokType  = "comment"
+					tokRepr  = stringSub(s, ptrStart, ptr - 1)
+					tokRepr  = equalSignCountIfLong and tokRepr or
+						(stringFind(tokRepr, "\n$") and tokRepr or tokRepr .. "\n") -- Make sure there's a newline at the end of single-line comments. (It may be missing if we've reached EOF.)
+					tokValue = equalSignCountIfLong and stringSub(tokRepr, 5 + equalSignCountIfLong, -3 -
+						equalSignCountIfLong) or stringSub(tokRepr, 3, -2)
+				else
+					ln = ln + countSubString(s, ptrStart, ptr - 1, "\n", true)
+				end
 
 				-- Number.
 			elseif BYTES_NUM[b1] or (BYTES_DOT[b1] and BYTES_NUM[b2]) then
@@ -938,11 +1026,10 @@ do
 
 				-- Quoted string.
 			elseif BYTES_QUOTE[b1] then
-				local quote     = stringSub(s, ptr, ptr)
-				local quoteByte = stringByte(quote)
+				local quoteByte = b1
 				ptr             = ptr + 1
 
-				local pat       = "[" .. quote .. "\\\n]"
+				local pat       = (quoteByte == 34) and PAT_STRING_STOP_DOUBLE or PAT_STRING_STOP_SINGLE
 
 				while true do
 					local i1 = stringFind(s, pat, ptr)
@@ -1048,27 +1135,20 @@ do
 			else
 				return nil, formatErrorInFile(s, path, ptrStart, "Tokenizer", "Unknown character.")
 			end
-			assert(tokType)
+				-- RAM analysis: If we skipped a comment (see above), there is no token to record.
+				if tokType then
+					ln            = ln + countString(tokRepr, "\n", true)
+					count         = count + 1
 
-			ln            = ln + countString(tokRepr, "\n", true)
-			count         = count + 1
+					tokens[count] = {
+						path, lnStart, ln, ptrStart, ptr - 1,
+						type           = tokType,
+						value          = tokValue,
+					}
 
-			tokens[count] = {
-				type           = tokType,
-				value          = tokValue,
-				representation = tokRepr,
-
-				sourceString   = s,
-				sourcePath     = path,
-
-				lineStart      = lnStart,
-				lineEnd        = ln,
-				positionStart  = ptrStart,
-				positionEnd    = ptr - 1,
-			}
-
-			-- print(F("%4d %-11s '%s'", count, tokType, (stringGsub(tokRepr, "\n", "\\n"))))
-		end
+					-- print(F("%4d %-11s '%s'", count, tokType, (stringGsub(tokRepr, "\n", "\\n"))))
+				end
+			end
 
 		return tokens
 	end
@@ -1091,7 +1171,7 @@ local function getLeftmostToken(node)
 	if node.type == "binary" then
 		return getLeftmostToken(node.left)
 	else
-		return node.token
+		return node[NODE_TOKEN]
 	end
 end
 
@@ -1299,11 +1379,11 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 			unary.operator == "-"
 			and subExpr.type == "literal"
 			and type(subExpr.value) == "number"
-			and isTokenType(subExpr.token, "number")
+			and isTokenType(subExpr[NODE_TOKEN], "number")
 			and not (subExpr.value == 0 and NORMALIZE_MINUS_ZERO) -- We cannot store -0 in Lua 5.3+, thus we need to keep the unary expression.
 		then
 			subExpr.value = -subExpr.value
-			subExpr.token = unary.token
+			subExpr[NODE_TOKEN] = unary[NODE_TOKEN]
 			expr          = subExpr
 		end
 
@@ -1322,7 +1402,7 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 
 		local func, tokNext, err = parseFunctionParametersAndBody(tokens, tok, funcTok)
 		if not func then return nil, tok, err end
-		func.token = tok
+		func[NODE_TOKEN] = tok
 		tok        = tokNext
 
 		expr       = func
@@ -1393,13 +1473,13 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 				and lhsExpr.type == "literal" and type(lhsExpr.value) == "number"
 				and rhsExpr.type == "literal" and rhsExpr.value == 0
 				and (
-					isTokenType(lhsExpr.token, "number")
+					isTokenType(lhsExpr[NODE_TOKEN], "number")
 					or (
-						isToken(lhsExpr.token, "punctuation", "-")
-						and isTokenType(tokens[indexOf(tokens, lhsExpr.token, tokStart, tokOp - 1) + 1], "number") -- @Speed: Don't use indexOf().
+						isToken(lhsExpr[NODE_TOKEN], "punctuation", "-")
+						and isTokenType(tokens[indexOf(tokens, lhsExpr[NODE_TOKEN], tokStart, tokOp - 1) + 1], "number") -- @Speed: Don't use indexOf().
 					)
 				)
-				and isTokenType(rhsExpr.token, "number")
+				and isTokenType(rhsExpr[NODE_TOKEN], "number")
 			then
 				lhsExpr.value = lhsExpr.value / 0
 				expr          = lhsExpr
@@ -1416,7 +1496,7 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 			if not ident then return nil, tok, err end
 			tok = tokNext
 
-			local literal = AstLiteral(ident.token, ident.name)
+			local literal = AstLiteral(ident[NODE_TOKEN], ident.name)
 
 			lookup.object = expr
 			lookup.member = literal
@@ -1467,7 +1547,7 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 
 			-- f()
 		elseif isToken(currentToken, "punctuation", "(") then
-			if tok >= 2 and currentToken.lineStart > tokens[tok - 1].lineEnd then
+			if tok >= 2 and currentToken[TOKEN_LINESTART] > tokens[tok - 1][TOKEN_LINEEND] then
 				return nil, tok,
 					formatErrorAtToken(currentToken, "Parser",
 						"Ambigous syntax. Is this a function call or a new statement?")
@@ -1501,7 +1581,7 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 				if not ident then return nil, tok, err end
 				tok = tokNext
 
-				local literal = AstLiteral(ident.token, ident.name)
+				local literal = AstLiteral(ident[NODE_TOKEN], ident.name)
 
 				lookup.object = expr
 				lookup.member = literal
@@ -1523,7 +1603,7 @@ function parseExpressionInternal(tokens, tokStart, lastPrecedence) --> expressio
 					call.arguments[1] = tableNode
 					tok               = tokNext
 				elseif isToken(tokens[tok], "punctuation", "(") then
-					if tok >= 2 and tokens[tok].lineStart > tokens[tok - 1].lineEnd then
+					if tok >= 2 and tokens[tok][TOKEN_LINESTART] > tokens[tok - 1][TOKEN_LINEEND] then
 						return nil, tok,
 							formatErrorAtToken(tokens[tok], "Parser",
 								"Ambigous syntax. Is this a function call or a new statement?")
@@ -1648,7 +1728,7 @@ local function parseOneOrPossiblyMoreStatements(tokens, tokStart, statements) --
 
 		local block, tokNext, err = parseBlock(tokens, tok, tok - 1, true)
 		if not block then return false, tok, err end
-		block.token = tok - 1
+		block[NODE_TOKEN] = tok - 1
 		tok         = tokNext
 
 		if not isToken(tokens[tok], "keyword", "end") then
@@ -1679,7 +1759,7 @@ local function parseOneOrPossiblyMoreStatements(tokens, tokStart, statements) --
 
 		local block, tokNext, err = parseBlock(tokens, tok, tok - 1, true)
 		if not block then return false, tok, err end
-		block.token    = tok - 1
+		block[NODE_TOKEN] = tok - 1
 		whileLoop.body = block
 		tok            = tokNext
 
@@ -1860,7 +1940,7 @@ local function parseOneOrPossiblyMoreStatements(tokens, tokStart, statements) --
 			if not ident then return false, tok, err end
 			tok = tokNext
 
-			local literal = AstLiteral(ident.token, ident.name)
+			local literal = AstLiteral(ident[NODE_TOKEN], ident.name)
 			lookup.member = literal
 
 			lookup.object = targetExpr
@@ -1879,7 +1959,7 @@ local function parseOneOrPossiblyMoreStatements(tokens, tokStart, statements) --
 			if not ident then return false, tok, err end
 			tok = tokNext
 
-			local literal = AstLiteral(ident.token, ident.name)
+			local literal = AstLiteral(ident[NODE_TOKEN], ident.name)
 			lookup.member = literal
 
 			lookup.object = targetExpr
@@ -1893,7 +1973,7 @@ local function parseOneOrPossiblyMoreStatements(tokens, tokStart, statements) --
 		tok = tokNext
 
 		if isMethod then
-			local ident = AstIdentifier(func.token, "self")
+			local ident = AstIdentifier(func[NODE_TOKEN], "self")
 			tableInsert(func.parameters, 1, ident)
 		end
 
@@ -2096,77 +2176,126 @@ function parseBlock(tokens, tok, blockTok, stopAtEndKeyword) --> block, token, e
 	return block, tok
 end
 
--- block, error = tokensToAst( tokens, asBlock )
-local function tokensToAst(tokens, asBlock)
-	local tokensPurged = {}
-	local count        = 0
+-- Drops the token back-references from an AST so that the token tables can be
+-- garbage collected. The tokens are only needed while parsing; afterwards the
+-- nodes keep their own sourcePath/line/position information.
+local function releaseTokens(node)
+	if not node then return end
 
-	do
-		-- Dummy start token.
-		local token         = tokens[1]
-		count               = count + 1
+	node[NODE_TOKEN] = nil
 
-		tokensPurged[count] = {
-			type           = "start",
-			value          = "",
-			representation = "",
+	local nodeType = node.type
 
-			sourceString   = token and token.sourceString or "",
-			sourcePath     = token and token.sourcePath or "?",
-
-			lineStart      = 1,
-			lineEnd        = 1,
-			positionStart  = 1,
-			positionEnd    = 1,
-		}
+	if nodeType == "table" then
+		for _, tableField in ipairs(node.fields) do
+			releaseTokens(tableField.key)
+			releaseTokens(tableField.value)
+		end
+	elseif nodeType == "lookup" then
+		releaseTokens(node.object)
+		releaseTokens(node.member)
+	elseif nodeType == "unary" then
+		releaseTokens(node.expression)
+	elseif nodeType == "binary" then
+		releaseTokens(node.left)
+		releaseTokens(node.right)
+	elseif nodeType == "call" then
+		releaseTokens(node.callee)
+		for _, expr in ipairs(node.arguments) do releaseTokens(expr) end
+	elseif nodeType == "function" then
+		for _, name in ipairs(node.parameters) do releaseTokens(name) end
+		releaseTokens(node.body)
+	elseif nodeType == "return" then
+		for _, expr in ipairs(node.values) do releaseTokens(expr) end
+	elseif nodeType == "block" then
+		for _, statement in ipairs(node.statements) do releaseTokens(statement) end
+	elseif nodeType == "declaration" then
+		for _, ident in ipairs(node.names) do releaseTokens(ident) end
+		for _, expr in ipairs(node.values) do releaseTokens(expr) end
+	elseif nodeType == "assignment" then
+		for _, expr in ipairs(node.targets) do releaseTokens(expr) end
+		for _, expr in ipairs(node.values) do releaseTokens(expr) end
+	elseif nodeType == "if" then
+		releaseTokens(node.condition)
+		releaseTokens(node.bodyTrue)
+		releaseTokens(node.bodyFalse)
+	elseif nodeType == "while" then
+		releaseTokens(node.condition)
+		releaseTokens(node.body)
+	elseif nodeType == "repeat" then
+		releaseTokens(node.body)
+		releaseTokens(node.condition)
+	elseif nodeType == "for" then
+		for _, ident in ipairs(node.names) do releaseTokens(ident) end
+		for _, expr in ipairs(node.values) do releaseTokens(expr) end
+		releaseTokens(node.body)
 	end
+end
 
-	-- Remove useless tokens.
+-- block, error = tokensToAst( tokens, asBlock )
+-- RAM separates: The token array is compacted in place. The old code built a full
+-- tokensPurged copy - a second allocation holding one pointer per token. Shifting
+-- the kept tokens down by one slot reuses the array for the dummy start/end tokens.
+-- Note: With comment-skipping in tokenize() there is usually nothing to drop here.
+-- The dummy end token is still derived from the last raw token, so EOF error
+-- message line numbers are unchanged.
+local function tokensToAst(tokens, asBlock)
+	local lastToken = tokens[#tokens]
+
+	-- RAM separates: The old code built a full tokensPurged copy - a second allocation
+	-- holding one pointer per token. Instead, compact the array in place, then shift it
+	-- up by one slot to make room for the dummy start token. The shift walks from the
+	-- end so tokens are read before their old slots are overwritten.
+	local count     = 0
 	for tok = 1, #tokens do
 		local tokType = tokens[tok].type
-
 		if not (tokType == "comment" or tokType == "whitespace") then
-			count               = count + 1
-			tokensPurged[count] = tokens[tok]
+			count         = count + 1
+			tokens[count] = tokens[tok]
 		end
 	end
+	local lastKept   = tokens[count]
+	for i = count, 1, -1 do tokens[i + 1] = tokens[i] end
 
-	do
-		-- Dummy end token.
-		local token         = tokens[#tokens]
-		local ln            = token and 1 + countString(token.sourceString, "\n", true) or 0
-		local pos           = token and #token.sourceString + 1 or 0
-		count               = count + 1
+	-- Dummy start token.
+	tokens[1]        = {
+		(tokens[2] and tokens[2][TOKEN_SOURCEPATH] or (lastToken and lastToken[TOKEN_SOURCEPATH] or "?")), 1, 1, 1, 1,
+		type           = "start",
+		value          = "",
+	}
 
-		tokensPurged[count] = {
-			type           = "end",
-			value          = "",
-			representation = "",
-
-			sourceString   = token and token.sourceString or "",
-			sourcePath     = token and token.sourcePath or "?",
-
-			lineStart      = ln,
-			lineEnd        = ln,
-			positionStart  = pos,
-			positionEnd    = pos,
-		}
-	end
+	-- Dummy end token.
+	local ln         = lastToken and lastToken[TOKEN_LINEEND] or 0
+	local pos        = lastToken and lastToken[TOKEN_POSITIONEND] + 1 or 0
+	count            = count + 1
+	tokens[count + 1] = {
+		(lastKept and lastKept[TOKEN_SOURCEPATH] or (lastToken and lastToken[TOKEN_SOURCEPATH] or "?")), ln, ln, pos, pos,
+		type           = "end",
+		value          = "",
+	}
+	-- Clear stale duplicate references left behind by the compaction so the array
+	-- holds no extra pointers.
+	for i = count + 2, #tokens do tokens[i] = nil end
 
 	statementErrorReported = false
 
 	local ast, _, err
 	if asBlock then
-		ast, _, err = parseBlock(tokensPurged, 2, 2, false)
+		ast, _, err = parseBlock(tokens, 2, 2, false)
 	else
-		ast, _, err = parseExpressionInternal(tokensPurged, 2, 0)
+		ast, _, err = parseExpressionInternal(tokens, 2, 0)
 	end
 	if not ast then return nil, err end
+
+	tokens = nil
+	releaseTokens(ast)
 
 	return ast
 end
 
 -- ast, error = parse( tokens )
+-- NOTE: When passing a pre-tokenized array it is compacted in place (dummy start/end
+-- tokens are prepended/appended) - the array must not be reused afterwards.
 -- ast, error = parse( luaString [, pathForErrorMessages="?" ] )
 local function parse(luaOrTokens, path)
 	assertArg2("parse", 1, luaOrTokens, "string", "table")
@@ -2296,21 +2425,21 @@ local function findIdentifierDeclaration(ident)
 
 	while true do
 		local lastChild = parent
-		parent          = parent.parent
+		parent          = parent[NODE_PARENT]
 
 		if not parent then return nil end
 
 		if parent.type == "declaration" then
 			local decl = parent
 
-			if lastChild.container == decl.names then
+			if lastChild[NODE_CONTAINER] == decl.names then
 				assert(lastChild == ident)
 				return ident -- ident is the declaration node.
 			end
 		elseif parent.type == "function" then
 			local func = parent
 
-			if lastChild.container == func.parameters then
+			if lastChild[NODE_CONTAINER] == func.parameters then
 				assert(lastChild == ident)
 				return ident -- ident is the declaration node.
 			else
@@ -2321,10 +2450,10 @@ local function findIdentifierDeclaration(ident)
 		elseif parent.type == "for" then
 			local forLoop = parent
 
-			if lastChild.container == forLoop.names then
+			if lastChild[NODE_CONTAINER] == forLoop.names then
 				assert(lastChild == ident)
 				return ident -- ident is the declaration node.
-			elseif lastChild.container ~= forLoop.values then
+			elseif lastChild[NODE_CONTAINER] ~= forLoop.values then
 				local declIdent = lastItemWith1(forLoop.names, "name", name)
 				if declIdent then return declIdent end
 			end
@@ -2332,7 +2461,7 @@ local function findIdentifierDeclaration(ident)
 			local block = parent
 
 			-- Look through statements above lastChild.
-			for i = lastChild.key - 1, 1, -1 do
+			for i = lastChild[NODE_KEY] - 1, 1, -1 do
 				local statement = block.statements[i]
 
 				if statement.type == "declaration" then
@@ -2368,7 +2497,7 @@ local function findVarargDeclaration(vararg)
 	local parent = vararg
 
 	while true do
-		parent = parent.parent
+		parent = parent[NODE_PARENT]
 		if not parent then return nil end
 
 		if parent.type == "function" then
@@ -2388,7 +2517,7 @@ local function findLabel(gotoNode)
 	local parent = gotoNode
 
 	while true do
-		parent = parent.parent
+		parent = parent[NODE_PARENT]
 		if not parent then return nil end
 
 		if parent.type == "block" then
@@ -2413,22 +2542,21 @@ local function findParentStatementAndBlockOrNodeOfInterest(node, declIdent)
 		if node == declIdent then return declIdent, nil end
 
 		local lastChild = node
-		node            = node.parent
+		node            = node[NODE_PARENT]
 
 		if not node then return nil end
 
 		if node.type == "block" then return lastChild, node end
-		if node.type == "declaration" and lastChild.container ~= node.values then return node, nil end
+		if node.type == "declaration" and lastChild[NODE_CONTAINER] ~= node.values then return node, nil end
 		if node.type == "function" then return node, nil end
-		if node.type == "for" and lastChild.container ~= node.values then return node, nil end
+		if node.type == "for" and lastChild[NODE_CONTAINER] ~= node.values then return node, nil end
 		if node.type == "repeat" and lastChild == node.condition then return node, nil end
 	end
 end
 
--- foundCurrentDeclIdent = lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock( declIdentWatchers, currentIdentInfo, block, statementStartIndex )
-local function lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, identInfo, block, iStart)
+-- foundCurrentDeclIdent = lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock( declIdentWatchers, currentIdentOrVararg, block, statementStartIndex )
+local function lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, currentIdentOrVararg, block, iStart)
 	local statements           = block.statements
-	local currentIdentOrVararg = identInfo.ident
 	local currentDeclIdent     = currentIdentOrVararg.declaration
 
 	for i = iStart, 1, -1 do
@@ -2451,13 +2579,13 @@ local function lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(de
 end
 
 local function getInformationAboutIdentifiersAndUpdateReferences(node)
-	local identInfos        = { --[[ [ident1]=identInfo1, identInfo1, ... ]] } -- identInfo = {ident=identOrVararg, type=lrvalueType}
-	local declIdentWatchers = { --[[ [declIdent1]={identOrVararg1,...}, ... ]] }
+	local idents            = {}
+	local declIdentWatchers = setmetatable({}, {__mode = "k"}) --[[ [declIdent1]={identOrVararg1,...}, ... ]]
 
 	traverseTree(node, function(node, parent, container, key)
-		node.parent    = parent
-		node.container = container
-		node.key       = key
+		node[NODE_PARENT]    = parent
+		node[NODE_CONTAINER] = container
+		node[NODE_KEY]       = key
 
 		if node.type == "identifier" or node.type == "vararg" then
 			local currentIdentOrVararg       = node
@@ -2466,22 +2594,9 @@ local function getInformationAboutIdentifiersAndUpdateReferences(node)
 			local currentDeclIdent           = findDecl(currentIdentOrVararg) -- We can call this because all parents and previous nodes already have their references updated at this point.
 			currentIdentOrVararg.declaration = currentDeclIdent
 
-			local identType                  = (
-				(parent and (
-					(parent.type == "declaration" and (container == parent.names)) or
-					(parent.type == "assignment" and (container == parent.targets)) or
-					(parent.type == "function" and (container == parent.parameters)) or
-					(parent.type == "for" and (container == parent.names))
-				))
-				and "lvalue"
-				or "rvalue"
-			)
-
 			-- if currentDeclIdent then  print(F("%s:%d: %s '%s'", currentIdentOrVararg.sourcePath, currentIdentOrVararg.line, identType, (currentIdentOrVararg.name or "...")))  end -- DEBUG
 
-			local identInfo                  = { ident = currentIdentOrVararg, type = identType }
-			tableInsert(identInfos, identInfo)
-			identInfos[currentIdentOrVararg] = identInfo
+			tableInsert(idents, currentIdentOrVararg)
 
 			-- Determine visible declarations for the identifier.
 			local block = currentIdentOrVararg -- Start node for while loop.
@@ -2499,10 +2614,10 @@ local function getInformationAboutIdentifiersAndUpdateReferences(node)
 				if block then
 					local statement = statementOrInterest
 
-					assert(type(statement.key) == "number")
-					assert(statement.container == block.statements)
+					assert(type(statement[NODE_KEY]) == "number")
+					assert(statement[NODE_CONTAINER] == block.statements)
 
-					if lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, identInfo, block, statement.key - 1) then
+					if lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, currentIdentOrVararg, block, statement[NODE_KEY] - 1) then
 						return
 					end
 
@@ -2521,7 +2636,7 @@ local function getInformationAboutIdentifiersAndUpdateReferences(node)
 					local repeatLoop = statementOrInterest
 					block            = repeatLoop.body -- Start node for while loop.
 
-					if lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, identInfo, block, #block.statements) then
+					if lookForCurrentDeclIdentAndRegisterCurrentIdentAsWatcherInBlock(declIdentWatchers, currentIdentOrVararg, block, #block.statements) then
 						return
 					end
 
@@ -2546,9 +2661,10 @@ local function getInformationAboutIdentifiersAndUpdateReferences(node)
 		end
 	end)
 
-	return identInfos, declIdentWatchers
+	return idents, declIdentWatchers
 end
 local generateName
+local nameCache = {}
 do
 	local BANK_LETTERS  =
 	"etaoinshrdlcumwfgypbvkxjqzETAOINSHRDLCUMWFGYPBVKXJQZ" -- http://en.wikipedia.org/wiki/Letter_frequencies
@@ -2558,22 +2674,21 @@ do
 	for name in pairs(KEYWORDS) do ILLEGAL_NAMES[name] = true end
 	if HANDLE_ENV then ILLEGAL_NAMES._ENV = true end
 
-	local cache = {}
-
 	--[[local]]
 	function generateName(nameGeneration)
-		if not cache[nameGeneration] then
+		if not nameCache[nameGeneration] then
 			-- @Cleanup: Output the most significant byte first. (We need to know the length beforehand then, probably, so we use the correct bank.)
 			local charBytes = {}
+			local g         = nameGeneration
 
 			for i = 1, 1 / 0 do
-				nameGeneration  = nameGeneration - 1
+				g              = g - 1
 				local charBank  = (i == 1) and BANK_LETTERS or BANK_ALPHANUM
-				local charIndex = nameGeneration % #charBank + 1
+				local charIndex = g % #charBank + 1
 				charBytes[i]    = stringByte(charBank, charIndex)
-				nameGeneration  = mathFloor(nameGeneration / #charBank)
+				g               = mathFloor(g / #charBank)
 
-				if nameGeneration == 0 then break end
+				if g == 0 then break end
 			end
 
 			local name = stringChar(tableUnpack(charBytes))
@@ -2581,14 +2696,18 @@ do
 				-- We will probably realistically never get here, partially because of the limited amount of locals and upvalues Lua allows.
 				name = name .. "_"
 			end
-			cache[nameGeneration] = name
+			nameCache[nameGeneration] = name
 		end
 
-		return cache[nameGeneration]
+		return nameCache[nameGeneration]
 	end
 
 	-- for nameGeneration = 1, 3500 do  print(generateName(nameGeneration))  end ; error("TEST")
 	-- for pow = 0, 32 do  print(generateName(2^pow))  end ; error("TEST")
+end
+
+local function clearCaches()
+	for k in pairs(nameCache) do nameCache[k] = nil end
 end
 -- stats = minify( node )
 local function minify(node)
@@ -2596,15 +2715,14 @@ local function minify(node)
 	local stats                         = Stats()
 
 	-- @Cleanup: Use findShadows()?
-	local identInfos, declIdentWatchers = getInformationAboutIdentifiersAndUpdateReferences(node)
+	local idents, declIdentWatchers     = getInformationAboutIdentifiersAndUpdateReferences(node)
 	-- local funcInfos                                    = getInformationAboutFunctions(node)
 	-- local declIdentReadCount, declIdentAssignmentCount = getAccessesOfDeclaredNames(funcInfos, identInfos, declIdentWatchers)
 
 	local allDeclIdents                 = {}
 
-	for _, identInfo in ipairs(identInfos) do
-		local identOrVararg = identInfo.ident
-		local declIdent     = (identOrVararg.type == "identifier") and identOrVararg.declaration or nil
+	for _, ident in ipairs(idents) do
+		local declIdent = (ident.type == "identifier") and ident.declaration or nil
 
 		if declIdent and not allDeclIdents[declIdent] then
 			tableInsert(allDeclIdents, declIdent)
@@ -2660,7 +2778,7 @@ local function minify(node)
 				newName         = generateName(nameGeneration)
 				local collision = false
 
-				for _, watcherIdent in ipairs(declIdentWatchers[declIdent]) do
+				for _, watcherIdent in ipairs(declIdentWatchers[declIdent] or {}) do
 					local watcherDeclIdent = watcherIdent.declaration
 
 					-- Local watcher.
@@ -2721,8 +2839,7 @@ local function minify(node)
 	-- print("maxNameGeneration", maxNameGeneration) -- DEBUG
 
 	-- Rename all remaining identifiers.
-	for _, identInfo in ipairs(identInfos) do
-		local ident     = identInfo.ident -- Could be a vararg.
+	for _, ident in ipairs(idents) do
 		local declIdent = (ident.type == "identifier") and ident.declaration or nil
 
 		if declIdent and ident.name ~= declIdent.name then
@@ -3604,6 +3721,9 @@ parser = {
 
 	-- Conversion.
 	toLua = toLua,
+
+	-- Cache management.
+	clearCaches = clearCaches,
 }
 
 return parser

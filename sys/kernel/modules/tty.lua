@@ -977,7 +977,8 @@ function tty.new(gpu, keyboard_addrs)
         if sig == "key_down" then
             self:onKeyDown(char, code)
         elseif sig == "clipboard" then
-            self:clipboard(code)
+            -- Clipboard event's 3rd return (char) is the text, not the 4th (code)
+            self:clipboard(char)
         end
     end, math.huge, math.huge)
 

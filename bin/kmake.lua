@@ -49,11 +49,13 @@ local function rewriteLine(text)
     io.write("\r" .. ESC .. "[K" .. text)
 end
 
-local STAGE_SYMBOLS = { "r", "p", "m", "w" }
-local NUM_STAGES    = #STAGE_SYMBOLS
+local STAGE_SYMBOLS     = { "r", "p", "m", "w" }
+local NUM_STAGES        = #STAGE_SYMBOLS
+
+local progressBarBuffer = {}
 
 local function progressBar(stage)
-    local bar = {}
+    local bar = progressBarBuffer
     for j = 1, NUM_STAGES do
         bar[j] = (j <= stage) and STAGE_SYMBOLS[j] or " "
     end
@@ -79,39 +81,64 @@ end
 -- Makes it embeddable into a file as a string
 local function escape(s)
     local out = {}
-    for i = 1, #s do
-        local c = s:sub(i, i)
-        local b = c:byte()
-        if c == "\\" then
-            out[#out + 1] = "\\\\"
-        elseif c == "\"" then
-            out[#out + 1] = "\\\""
-        elseif c == "\n" then
-            out[#out + 1] = "\\n"
-        elseif c == "\r" then
-            out[#out + 1] = "\\r"
-        elseif c == "\t" then
-            out[#out + 1] = "\\t"
+    local n = 0
+    local runStart = 1
+    local len = #s
+
+    for i = 1, len do
+        local b = string.byte(s, i)
+        local repl
+
+        if b == 92 then
+            repl = "\\\\"
+        elseif b == 34 then
+            repl = "\\\""
+        elseif b == 10 then
+            repl = "\\n"
+        elseif b == 13 then
+            repl = "\\r"
+        elseif b == 9 then
+            repl = "\\t"
         elseif b < 32 or b >= 127 then
-            out[#out + 1] = string.format("\\%03d", b)
-        else
-            out[#out + 1] = c
+            repl = string.format("\\%03d", b)
+        end
+
+        if repl then
+            if runStart < i then
+                n = n + 1
+                out[n] = string.sub(s, runStart, i - 1)
+            end
+            n = n + 1
+            out[n] = repl
+            runStart = i + 1
         end
     end
+
+    if runStart <= len then
+        n = n + 1
+        out[n] = string.sub(s, runStart, len)
+    end
+
     return table.concat(out)
 end
+
+local readBuffer = {}
 
 local function readFile(path)
     local handle, reason = filesystem.open(path, "r")
     if not handle then return nil, reason end
-    local chunks = {}
+    local chunks = readBuffer
+    local n = 0
     while true do
         local chunk = handle:read(4096)
         if not chunk then break end
-        chunks[#chunks + 1] = chunk
+        n = n + 1
+        chunks[n] = chunk
     end
     handle:close()
-    return table.concat(chunks)
+    local data = table.concat(chunks, "", 1, n)
+    for i = 1, n do chunks[i] = nil end
+    return data
 end
 
 -- Makes a file
@@ -149,12 +176,12 @@ local function buildFile(label, moddir, outfile, varname, ...)
     printProgressBlock(items)
 
     -- read parse minify write
+    local src, ast, result
     for idx, f in ipairs(files) do
         local name = f:sub(1, -5)
         local path = filesystem.concat(moddir, f)
         local err
 
-        local src
         src, err = readFile(path)
         if not src then
             out:close()
@@ -166,8 +193,9 @@ local function buildFile(label, moddir, outfile, varname, ...)
         updateProgressLine(items, idx, #items)
 
         -- Thanks dumbluaparser
-        local ast
         ast, err = parser.parse(src, path)
+        parser.clearCaches()
+        src = nil
         if not ast then
             out:close()
             io.write("\nkmake: cannot parse " .. name .. ": " .. tostring(err) .. "\n")
@@ -179,8 +207,10 @@ local function buildFile(label, moddir, outfile, varname, ...)
 
         -- And for minifying
         parser.minify(ast)
-        local result
+        parser.clearCaches()
         result, err = parser.toLua(ast)
+        parser.clearCaches()
+        ast = nil
         if not result then
             out:close()
             io.write("\nkmake: cannot minify " .. name .. ": " .. tostring(err) .. "\n")
@@ -192,6 +222,7 @@ local function buildFile(label, moddir, outfile, varname, ...)
 
         -- Write it
         out:write(varname .. "[\"" .. name .. "\"] = \"" .. escape(result) .. "\"\n")
+        result = nil
         items[idx].stage = 4
         updateProgressLine(items, idx, #items)
     end
