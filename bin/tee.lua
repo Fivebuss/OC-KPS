@@ -34,7 +34,7 @@ local handles = {}
 local mode = append and "a" or "w"
 for _, name in ipairs(files) do
     local full = console.resolvePath(console.currPath(), name)
-    local h, reason = filesystem.open(full, mode)
+    local h, reason = io.open(full, mode)
     if not h then
         io.writelnError("tee: " .. name .. ": " .. tostring(reason))
         -- Keep going though

@@ -30,7 +30,7 @@ for _, rawTarget in ipairs(files) do
     )
 
     -- Can I cheat and just do this for both cases lol
-    local ok, reason = filesystem.open(full, "wb")
+    local ok, reason = io.open(full, "wb")
 
     if not ok then
         io.writelnError(

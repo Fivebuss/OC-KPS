@@ -310,10 +310,10 @@ local function processFile(rawArg)
         return false
     end
 
-    local handle, reason = filesystem.open(fullPath, "rb")
+    local handle, reason = io.open(fullPath, "rb")
 
     if not handle then
-        handle, reason = filesystem.open(fullPath, "r")
+        handle, reason = io.open(fullPath, "r")
     end
 
     if not handle then

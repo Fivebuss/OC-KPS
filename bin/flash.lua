@@ -100,7 +100,7 @@ local function saveRom()
     end
 
     local bios = eeprom.get()
-    local file, reason = filesystem.open(fileName, "wb")
+    local file, reason = io.open(fileName, "wb")
     if not file then
         return nil, tostring(reason)
     end
@@ -129,9 +129,9 @@ local function writeRom()
         return nil, "Is a directory"
     end
 
-    local file, reason = filesystem.open(fullPath, "rb")
+    local file, reason = io.open(fullPath, "rb")
     if not file then
-        file, reason = filesystem.open(fullPath, "r")
+        file, reason = io.open(fullPath, "r")
     end
     if not file then
         io.writelnError("flash: " .. rawArg .. ": Cannot open file: " .. tostring(reason))

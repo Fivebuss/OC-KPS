@@ -622,7 +622,7 @@ end
 -- Pipe stuff
 -- 'a' append mode is weird
 local function openForOutput(full, append)
-    return io.newFileStream(full, append and "a" or "w")
+    return io.open(full, append and "a" or "w")
 end
 
 -- error reason: path
@@ -695,7 +695,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         if filesystem.isDirectory(full) then
             return fail(ioErr("is a directory", redirects.stdinFile))
         end
-        local stream, reason = io.newFileStream(full, "r")
+        local stream, reason = io.open(full, "r")
         if not stream then return fail(ioErr(reason, redirects.stdinFile)) end
         stdin = stream
         owned[#owned + 1] = stream
@@ -897,6 +897,9 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                             read = function(...) return process.input():read(...) end,
                             readline = function(...) return process.input():readLine(...) end,
                             flush = function() return process.output():flush() end,
+
+                            -- this works now magically. mmmmkay
+                            open = function(...) return io.open(...) end,
 
                             -- Hey look, actual stream objects
                             stdin = fdStream(0),
@@ -1984,7 +1987,7 @@ local function sourceFile(path, getenv)
         writeRed(process.error(), "ksh: " .. ioErr("is a directory", path), "\n")
         return
     end
-    local f, reason = io.newFileStream(full, "r")
+    local f, reason = io.open(full, "r")
     if not f then
         writeRed(process.error(), "ksh: " .. ioErr(reason, path), "\n")
         return
@@ -2003,7 +2006,7 @@ end
 
 -- Scripts always go here
 runScriptLines = function(full, getenv)
-    local f, reason = io.newFileStream(full, "r")
+    local f, reason = io.open(full, "r")
     if not f then
         error(ioErr(reason, full), 0)
     end

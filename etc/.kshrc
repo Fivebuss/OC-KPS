@@ -4,5 +4,7 @@ export TERM=polaris-truecolor
 export VERSION=0.4
 alias id='whoami -i'
 alias stty='sterm'
+alias edit='kedit'
+alias login='echo "Login within a shell is hilariously broken. Dont use it. (This is aliased)"'
 lua /etc/motd.lua
 cd /home/$USER

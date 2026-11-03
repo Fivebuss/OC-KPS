@@ -26,7 +26,7 @@ local attrPath = ttyDev and (ttyDev .. "/attributes") or nil
 -- Get /dev/ttyN/attributes
 local function attrRead()
     if not attrPath then return nil end
-    local h, why = filesystem.open(attrPath, "r")
+    local h, why = io.open(attrPath, "r")
     if not h then return nil, why end
     local parts = {}
     while true do
@@ -41,7 +41,7 @@ end
 -- send stuff to them
 local function attrWrite(str)
     if not attrPath then return false end
-    local h, why = filesystem.open(attrPath, "w")
+    local h, why = io.open(attrPath, "w")
     if not h then return false, why end
     h:write(str)
     h:close()

@@ -54,7 +54,7 @@ if not resolved then
     return
 end
 
-local src, reason = filesystem.open(resolved, "r")
+local src, reason = io.open(resolved, "r")
 if not src then
     io.writelnError("env: cannot open " .. cmdName .. ": " .. tostring(reason))
     return

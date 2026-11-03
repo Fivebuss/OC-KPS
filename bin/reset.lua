@@ -45,7 +45,7 @@ end
 if tty then
     resetTty(tty)
 elseif attrPath then
-    local h, why = filesystem.open(attrPath, "w")
+    local h, why = io.open(attrPath, "w")
     if not h then
         io.stderr:writeln("reset: cannot open " .. attrPath .. ": " .. tostring(why))
         os.exit(1)

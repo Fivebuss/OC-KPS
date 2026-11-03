@@ -125,7 +125,7 @@ end
 local readBuffer = {}
 
 local function readFile(path)
-    local handle, reason = filesystem.open(path, "r")
+    local handle, reason = io.open(path, "r")
     if not handle then return nil, reason end
     local chunks = readBuffer
     local n = 0
@@ -160,7 +160,7 @@ local function buildFile(label, moddir, outfile, varname, ...)
     end
     table.sort(files)
 
-    local out, err = filesystem.open(outfile, "w")
+    local out, err = io.open(outfile, "w")
     if not out then
         io.write("kmake: cannot create " .. outfile .. ": " .. tostring(err) .. "\n")
         io.flush()
