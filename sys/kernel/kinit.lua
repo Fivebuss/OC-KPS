@@ -10,7 +10,7 @@ local filesystem = require("filesystem")
 polaris = {} -- global
 polaris.version = {}
 polaris.version.os = _G._OSVERSION
-polaris.version.kernel = "Polaris Kernel 0.2"
+polaris.version.kernel = "Polaris Kernel 0.3"
 _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
@@ -24,7 +24,7 @@ end
 
 polaris.analytics.addEvent("kinit_start")
 
--- Load config
+-- Load config (This is aweful)
 do
     local path = "/boot/polaris/kconfig.cfg"
     local cfg = dofile(path)

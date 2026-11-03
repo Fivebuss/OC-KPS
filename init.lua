@@ -7,7 +7,7 @@ local unicode = unicode
 
 local addr = computer.getBootAddress()
 local invoke = component.invoke
-_G._OSVERSION = "KPS 0.2"
+_G._OSVERSION = "KPS 0.4"
 
 
 -- Load and execute a Lua file.

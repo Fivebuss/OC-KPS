@@ -4,6 +4,7 @@
 -- May be lacking
 
 local unicode = require("unicode")
+local process = require("process")
 
 local readline = {}
 readline.__index = readline
@@ -92,7 +93,6 @@ function readline:read(skipPromptDraw)
 		return nil
 	end
 
-	if session.clearInput then session:clearInput() end
 	local prompt = self:promptString()
 
 	-- Fix multi-line
@@ -134,7 +134,7 @@ function readline:read(skipPromptDraw)
 		if curRelRow > 1 then
 			out[#out + 1] = "\27[" .. (curRelRow - 1) .. "A"
 		end
-		out[#out + 1] = "\27[J"
+		out[#out + 1] = "\27[K"
 		out[#out + 1] = prompt
 		out[#out + 1] = line
 		if suffixW > 0 then
@@ -208,7 +208,12 @@ function readline:read(skipPromptDraw)
 				table.remove(buf, pos)
 				pos = pos - 1
 				resetHistoryNavigation()
-				redrawLine()
+				if pos == #buf then
+					session:write_str("\27[D \27[D")
+					curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
+				else
+					redrawLine()
+				end
 			end
 			return true
 		end
@@ -351,14 +356,22 @@ function readline:read(skipPromptDraw)
 		return true
 	end
 
-	session:setDiscipline(disc) -- I addded this, saves alot of time
+	-- Fix flickering
+	local prevDisc = nil
+	if session.setDiscipline then
+		prevDisc = session.tty.discipline
+	end
+
+	session:setDiscipline(disc)
 
 	while not done do -- this is cursed
-		coroutine.yield()
+		process.yield()
 	end
 
 	session:removeDiscipline()
-	if session.clearInput then session:clearInput() end
+	if prevDisc then
+		session:setDiscipline(prevDisc)
+	end
 
 	if resultLine == nil then return nil end
 	self:push(resultLine)
