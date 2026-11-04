@@ -4,6 +4,7 @@
 
 local unicode = require("unicode")
 local event = require("event")
+local computer = require("computer")
 local io = require("io")
 
 -- Process does it's job
@@ -55,6 +56,7 @@ function tty.new(gpu, keyboard_addrs)
 
     self.rb = ""
     self.wb = ""
+    self.lastInput = 0
 
     self.discipline = nil
 
@@ -73,6 +75,7 @@ function tty.new(gpu, keyboard_addrs)
         if self.suspended then return end
         if char == 0 and code == 0 then return end
         if self.attributes.xoff then return end
+        self.lastInput = computer.uptime()
 
         local disc = self.discipline
         if disc and disc.onKeyDown and disc:onKeyDown(self, char, code) then
@@ -168,6 +171,7 @@ function tty.new(gpu, keyboard_addrs)
 
     function self:clipboard(text)
         if self.suspended or self.attributes.xoff then return end
+        self.lastInput = computer.uptime()
 
         local disc = self.discipline
         if disc and disc.onClipboard and disc:onClipboard(self, text) then

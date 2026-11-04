@@ -38,18 +38,18 @@ end
 
 local debugMode = polaris.config["debug"]
 
---Load compiled kmodules
-do
-    local bundle = dofile("/sys/kernel/kmodules.lua")
-    for name, src in pairs(bundle) do
-        local chunk, err = load(src, "=" .. name, "bt", _G)
+-- Load the compiled kmodules instead of the source
+if not debugMode then
+    do
+        local bundle = dofile("/sys/kernel/kmodules.lua")
+        for name, src in pairs(bundle) do
+            local chunk, err = load(src, "=" .. name, "t", _G)
+            if not chunk then
+                error("Failed to compile module " .. name .. ": " .. err)
+            end
+            bundle[name] = nil
 
-        if not chunk then
-            error("Failed to compile module " .. name .. ": " .. err)
-        end
-
-        package.preload[name] = function()
-            return chunk()
+            package.preload[name] = chunk
         end
     end
 end

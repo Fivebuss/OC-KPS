@@ -40,6 +40,7 @@ local function resetTty(t)
     t:setCursorShape("underline")
     t:clear()
     t:removeDiscipline()
+    t:resetColors()
 end
 
 if tty then

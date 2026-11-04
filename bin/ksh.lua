@@ -2086,6 +2086,9 @@ local function shellLoop()
     sourceFile("/etc/.kshrc", env.getenv)
 
     while true do
+        -- We kinda need input to always work back in the shell, so we can hopefully fix problems
+        tty.attributes["xoff"] = false
+
         -- Fix doubledraw?
         local promptDrawn = signalPrompt
         signalPrompt = false

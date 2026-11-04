@@ -4,6 +4,7 @@
 -- Most everything is just copy pasted from old tty
 
 local unicode = require("unicode")
+local computer = require("computer")
 local term = {}
 
 local len = unicode.len
@@ -410,7 +411,10 @@ function term.new(gpu, disc)
         { echo = true, line = true, raw = false, cursor = true, xoff = false }
     local disabled = disc and disc.disabled or {}
 
-    local colors = color_profiles[1]
+    local colors = {}
+    for i, color in ipairs(color_profiles[1]) do
+        colors[i] = color
+    end
     if type(cfg("tty.profile")) == "number" then
         colors = color_profiles[cfg("tty.profile")] or color_profiles[1]
     end
@@ -422,6 +426,10 @@ function term.new(gpu, disc)
                 colors[idx] = tonumber(col, 16) or colors[idx]
             end
         end
+    end
+    local originalColors = {}
+    for i, color in ipairs(colors) do
+        originalColors[i] = color
     end
 
     for i = 1, #colors do
@@ -464,6 +472,19 @@ function term.new(gpu, disc)
         bgp = true,
         cursorSaved = nil,
     }
+
+    local originalFg = t.fg
+    local originalBg = t.bg
+    local originalFgp = t.fgp
+    local originalBgp = t.bgp
+
+    local function applyColors(colors)
+        for i, color in ipairs(colors) do
+            if t.gpu.setPaletteColor then
+                t.gpu.setPaletteColor(i - 1, color)
+            end
+        end
+    end
 
     gpu.setForeground(t.fg, true)
     gpu.setBackground(t.bg, true)
@@ -564,6 +585,21 @@ function term.new(gpu, disc)
         syncCursor(self)
     end
 
+    function t:resetColors()
+        -- Restore pallete
+        applyColors(originalColors)
+
+        -- Restore fg/bg
+        self.fg = originalFg
+        self.bg = originalBg
+        self.fgp = originalFgp
+        self.bgp = originalBgp
+
+        -- Apply
+        self.gpu.setForeground(self.fg, self.fgp)
+        self.gpu.setBackground(self.bg, self.bgp)
+    end
+
     -- Finally supported
     function t:setResolution(w, h)
         if self.attributes.cursor then eraseCursor(self) end
@@ -652,10 +688,28 @@ function term.new(gpu, disc)
 
     function t:tickBlink()
         if not self.cursor.blink then return end
+
+        local disc = self.disc
+        local inputActive = disc and disc.lastInput
+            and computer.uptime() - disc.lastInput < 0.5
+        if inputActive then
+            if not self.cursor.blinkOn then
+                self.cursor.blinkOn = true
+
+                if self.attributes.cursor then
+                    eraseCursor(self)
+                    self.cursor.visible = true
+                    drawCursor(self)
+                end
+            end
+            return
+        end
         self.cursor.blinkOn = not self.cursor.blinkOn
         if self.attributes.cursor then eraseCursor(self) end
         self.cursor.visible = self.cursor.blinkOn
-        if self.attributes.cursor and self.cursor.visible then drawCursor(self) end
+        if self.attributes.cursor and self.cursor.visible then
+            drawCursor(self)
+        end
     end
 
     return t
