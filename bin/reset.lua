@@ -33,8 +33,8 @@ local function resetTty(t)
     t.attributes.xoff = false
     t.disabled = {}
     t.disabled.Z = true
-    local w, h = t:gpuInvoke("maxResolution")
-    t:setResolution(w, h)
+    t:setResolution(t.gpu.maxResolution())
+    t.gpu.setActiveBuffer(0)
     t:setCursor(true)
     t:setCursorVisible(true)
     t:setCursorShape("underline")

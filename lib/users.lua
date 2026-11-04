@@ -134,6 +134,34 @@ function M.add(username)
     return nextUid
 end
 
+
+function M.remove(username)
+    checkArg(1, username, "string")
+
+    local byName = load()
+    local entry = byName[username]
+
+    if not entry then
+        log("users: no such user '" .. username .. "'")
+        return nil, "no such user"
+    end
+
+    if entry.uid == 0 or username == "root" then
+        log("users: refusing to remove root user")
+        return nil, "cannot remove root user"
+    end
+
+    byName[username] = nil
+
+    if not save(byName) then
+        return nil, "failed to save user database"
+    end
+
+    log("users: successfully removed user '" .. username .. "'")
+    return true
+end
+
+
 function M.list()
     local byName, _ = load()
     local out = {}

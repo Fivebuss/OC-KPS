@@ -4,12 +4,14 @@
 
 local filesystem = require("filesystem")
 local parser     = require("luaparser")
+local event      = require("event")
 
 local arglist    = args or {}
 
 -- no args does both, -k builds kernel and -b builds boot scripts
 local doKernel   = true
 local doBoot     = true
+local doGc       = true
 local root       = "/"
 local i          = 1
 while i <= #arglist do
@@ -20,8 +22,9 @@ while i <= #arglist do
     elseif a == "-b" then
         doBoot   = true
         doKernel = false
-    elseif a == "-c" then
-        -- reserved, consumes next arg
+    elseif a == "-f" then
+        doGc = false
+        -- skip gc thing (I have enough memory!)
         if i + 1 <= #arglist then i = i + 1 end
     else
         root = a
@@ -32,6 +35,28 @@ end
 if root:sub(-1) == "/" then
     root = root:sub(1, -2)
 end
+
+local function runGc()
+    if doGc == true then
+        local max = 0
+        max = math.max(max, computer.freeMemory())
+
+        for _ = 1, 40 do
+            max = math.max(max, computer.freeMemory())
+            event.pull(0)
+        end
+    end
+end
+
+if doGc == true then
+    runGc()
+else
+    io.writeln("Skipping memory GC Trick for this run")
+end
+
+io.writeln("KPS Kmake V0.2")
+local startTime = computer.uptime()
+local startClock = os.clock()
 
 -- Look how fancy I am
 
@@ -195,6 +220,7 @@ local function buildFile(label, moddir, outfile, varname, ...)
         -- Thanks dumbluaparser
         ast, err = parser.parse(src, path)
         parser.clearCaches()
+        runGc()
         src = nil
         if not ast then
             out:close()
@@ -208,8 +234,10 @@ local function buildFile(label, moddir, outfile, varname, ...)
         -- And for minifying
         parser.minify(ast)
         parser.clearCaches()
+        runGc()
         result, err = parser.toLua(ast)
         parser.clearCaches()
+        runGc()
         ast = nil
         if not result then
             out:close()
@@ -241,17 +269,22 @@ local total = 0
 if doKernel then
     local moddir  = filesystem.concat(root, "/sys/kernel/modules")
     local outfile = filesystem.concat(root, "/sys/kernel/kmodules.lua")
-    local n       = buildFile("Building kernel modules:", moddir, outfile, "modules", "component.lua")
-    total         = total + n
+    io.writeln("Kmake: Started for " .. polaris.version.kernel)
+    local n = buildFile("Building kernel modules:", moddir, outfile, "modules", "component.lua")
+    total   = total + n
 end
 
 if doBoot then
     local bootdir = filesystem.concat(root, "/boot")
     local outfile = filesystem.concat(root, "/boot/bootscripts.lua")
+    io.writeln("Kmake: Started for " .. polaris.version.os)
     local n = buildFile("Building boot scripts:", bootdir, outfile, "boot",
         "boot.lua", "bootscripts.lua", "bootscripts_old.lua")
     total = total + n
 end
 
-io.write("kmake: done (" .. total .. " total)\n")
+io.writeln("kmake: done (" ..
+total ..
+" total)\nfinished in " ..
+tostring(computer.uptime() - startTime) .. " seconds\nused " .. tostring(os.clock() - startClock) .. " CPU exec time")
 io.flush()

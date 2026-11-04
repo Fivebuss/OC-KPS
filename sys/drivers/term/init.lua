@@ -658,11 +658,6 @@ function term.new(gpu, disc)
         if self.attributes.cursor and self.cursor.visible then drawCursor(self) end
     end
 
-    -- This is a good idea
-    function t:gpuInvoke(method, ...)
-        return self.gpu[method](...)
-    end
-
     return t
 end
 

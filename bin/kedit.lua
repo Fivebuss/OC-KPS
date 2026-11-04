@@ -8,7 +8,7 @@ It does not have bells and whistles.  Usage should be intuitive,
 and more or less identical to OpenOS's editor.
 
 Copyright (c) 2021 ULOS Developers under the GNU GPLv3.
-]]--
+]] --
 
 local filesystem = require("filesystem")
 local unicode = require("unicode")
@@ -169,7 +169,8 @@ local function redraw()
         scrollRow = curLine - h + 2
     end
     if scrollRow < 1 then scrollRow = 1 end
-    local maxScroll = math.max(1, #buffer - h + 2)
+    -- +1
+    local maxScroll = math.max(1, (#buffer + 1) - h + 2)
     if scrollRow > maxScroll then scrollRow = maxScroll end
 
     if curCol - hoffset + 1 > w then
@@ -335,48 +336,44 @@ local function deleteForward()
     end
 end
 
+local function curLineLen()
+    if curLine > #buffer then return 0 end
+    return UL(buffer[curLine])
+end
+
 local function clampCol()
-    local len = UL(buffer[curLine])
+    local len = curLineLen()
     if curCol > len then curCol = len end
 end
 
 local function moveLine(delta)
     local nl = curLine + delta
-    if nl < 1 then return end
-    if nl > #buffer then
-        -- pressing down at the end of the file hands you ONE fresh line,
-        -- but nothing beyond it (nano compat: the tail stays empty)
-        if delta ~= 1 or curLine ~= #buffer then return end
-        if UL(buffer[curLine]) == 0 then return end
-        table.insert(buffer, "")
-        curLine = nl
-        curCol = 0
-        unsaved = true
-        dirty = true
+
+    if nl < 1 or nl > #buffer + 1 then
         return
     end
+
     curLine = nl
     clampCol()
     dirty = true
 end
 
 local function moveCol(delta)
-    local len = UL(buffer[curLine])
+    local len = curLineLen()
     local nc = curCol + delta
 
     if nc < 0 then
         -- off the left edge: wrap up to the previous line's end
         if curLine > 1 then
             curLine = curLine - 1
-            curCol = UL(buffer[curLine])
+            curCol = curLineLen()
             dirty = true
         end
         return
     end
 
     if nc > len then
-        -- off the right edge: wrap down to the next line's start
-        if curLine < #buffer then
+        if curLine < #buffer + 1 then
             curLine = curLine + 1
             curCol = 0
             dirty = true
@@ -560,7 +557,9 @@ local function processKey(key)
     -- Paste
     if text then
         pendingQuit = false
-        insertText(text)
+        if curLine <= #buffer then
+            insertText(text)
+        end
         return
     end
 
@@ -598,7 +597,7 @@ local function processKey(key)
         elseif code == 209 then -- pgdn
             movePage(1)
         elseif code == 211 then -- delete
-            deleteForward()
+            if curLine <= #buffer then deleteForward() end
         end
         return
     end
@@ -626,21 +625,23 @@ local function processKey(key)
         curCol = 0
         dirty = true
     elseif char == 5 then -- ^E jump to end of line
-        curCol = UL(buffer[curLine])
+        curCol = curLineLen()
         dirty = true
     elseif char == 12 then -- ^L
         dirty = true
-    elseif char == 13 then -- enter
+    elseif curLine > #buffer then
+        return
+    elseif char == 13 then  -- enter
         splitLine()
-    elseif char == 8 then  -- backspace
+    elseif char == 8 then   -- backspace
         backspace()
-    elseif char == 9 then  -- tab
+    elseif char == 9 then   -- tab
         insertChar("  ")
-    elseif char == 4 then -- ^D delete forward
+    elseif char == 4 then   -- ^D delete forward
         deleteForward()
     elseif char == 127 then -- delete
         deleteForward()
-    elseif char == 26 then -- ^Z
+    elseif char == 26 then  -- ^Z
         -- nope
     elseif char >= 32 and char <= 0x10FFFF
         and not (char >= 0xD800 and char <= 0xDFFF) then
