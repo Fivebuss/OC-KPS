@@ -6,10 +6,10 @@ local process = polaris.process
 local io = require("io")
 local users = require("users")
 local filesystem = require("filesystem")
-local gpu = polaris.console._spawnGpu
+local gpu = ...
 
 local tty = polaris.console.openTTY({
-    gpu   = polaris.console._spawnGpu,
+    gpu   = gpu,
     owner = process.self() and process.self().pid,
 })
 
@@ -89,7 +89,7 @@ end
 
 local function loginLoop()
     tty:clear()
-    tty:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
+    tty:write("KPS v" .. polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
 
     local stdin = process.input()
 
@@ -151,7 +151,7 @@ local function loginLoop()
 
             -- And the login loop lives again
             tty:clear()
-            tty:write(polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
+            tty:write("KPS v" .. polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
         end
     end
 end

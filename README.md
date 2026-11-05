@@ -85,6 +85,6 @@ I have a soul and not unlimited time
 
 #### Why I am doing this
 No real reason, basically because I can to be honest.\
-If I had to justify it, I would snarkily respond with asking whoever's asking me to try "cat /dev/random | head -c 10" in openOS and realize that head doesn't exist and random cannot be interrupted
+I wanted a multi-gpu project and my own shell originally on mineOS. Well that was hell to do so I moved to my own OS thing
 
 ``See LICENSE and LICENSEINFO.md``

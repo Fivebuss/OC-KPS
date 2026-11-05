@@ -5,7 +5,6 @@ local process = require("process")
 local version = getenv("VERSION")
 
 local total = computer.totalMemory() / 1024
-local free = computer.freeMemory() / 1024
 
 local boot = polaris.analytics and polaris.analytics.boot or {}
 local ksh = boot["kshlaunch-" .. process.self().uid]
@@ -19,11 +18,11 @@ else
 end
 
 local text = string.format(
-    "ksh v%s\n%s\n%.1fK total %.1fK free\nReached ksh in %s",
+    "ksh v%s\n%s\n%s, %.1fK system\nReached ksh in %s",
     version,
     "",
+    _VERSION,
     total,
-    free,
     reached
 )
 

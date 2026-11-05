@@ -92,12 +92,12 @@ function loadfile(path)
     return fn
 end
 
-function dofile(path)
+function dofile(path, ...)
     local fn, err = loadfile(path)
     if not fn then
         error(err, 0)
     end
-    return fn()
+    return fn(...)
 end
 
 -- Just an alias really to process.spawn

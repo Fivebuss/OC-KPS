@@ -2,10 +2,8 @@
 
 if package.loaded["tty"] ~= nil then
     for gpu_addr in polaris.console.gpus() do
-        polaris.console._spawnGpu = gpu_addr
-        dofile("/bin/login.lua")
+        dofile("/bin/login.lua", gpu_addr)
     end
-    polaris.console._spawnGpu = nil
 else
     status("login shell failed to load: No tty")
 end

@@ -269,7 +269,7 @@ local total = 0
 if doKernel then
     local moddir  = filesystem.concat(root, "/sys/kernel/modules")
     local outfile = filesystem.concat(root, "/sys/kernel/kmodules.lua")
-    io.writeln("Kmake: Started for " .. polaris.version.kernel)
+    io.writeln("Kmake: Started for polaris kernel v" .. polaris.version.kernel)
     local n = buildFile("Building kernel modules:", moddir, outfile, "modules", "component.lua")
     total   = total + n
 end
@@ -277,7 +277,7 @@ end
 if doBoot then
     local bootdir = filesystem.concat(root, "/boot")
     local outfile = filesystem.concat(root, "/boot/bootscripts.lua")
-    io.writeln("Kmake: Started for " .. polaris.version.os)
+    io.writeln("Kmake: Started for KPS " .. polaris.version.os)
     local n = buildFile("Building boot scripts:", bootdir, outfile, "boot",
         "boot.lua", "bootscripts.lua", "bootscripts_old.lua")
     total = total + n

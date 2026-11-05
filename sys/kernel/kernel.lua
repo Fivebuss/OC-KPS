@@ -30,6 +30,9 @@ local function dispatch(req)
 end
 
 local function kernelProcess()
+    if _VERSION == "Lua 5.3" then
+        polaris.log("Warning: Lua 5.3 machine memory usage will be higher\nRecommend switch to Lua 5.4")
+    end
     while true do
         local msg = scheduler.waitForInput()
 

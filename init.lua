@@ -7,7 +7,7 @@ local unicode = unicode
 
 local addr = computer.getBootAddress()
 local invoke = component.invoke
-_G._OSVERSION = "KPS 0.4"
+_G._OSVERSION = "0.4"
 
 
 -- Load and execute a Lua file.
@@ -74,7 +74,7 @@ function _G.status(msg)
     end
 end
 
-status("Booting " .. _G._OSVERSION)
+status("Booting KPS " .. _G._OSVERSION)
 status("===============")
 
 status("Initializing package management")
@@ -108,7 +108,12 @@ status("Mounting root filesystem")
 filesystem.mount(addr, "/")
 
 -- Initialize kernel
-status(dofile("/sys/kernel/kinit.lua"))
+local kstat = dofile("/sys/kernel/kinit.lua")
+if kstat == false then
+    while true do computer.pullSignal(0) end
+else
+    status(kstat)
+end
 
 status("Executing stage 2 boot")
 

@@ -10,13 +10,17 @@ local filesystem = require("filesystem")
 polaris = {} -- global
 polaris.version = {}
 polaris.version.os = _G._OSVERSION
-polaris.version.kernel = "Polaris Kernel 0.3"
+polaris.version.kernel = "0.3"
 _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
 polaris.analytics = { boot = {} }
 
-status(polaris.version.kernel .. ": kinit exec, setting up kernel")
+status("kinit exec, initializing kernel")
+if _VERSION == "Lua 5.2" then
+    status("Failed to load kernel: Lua 5.2 unsupported! Please switch to Lua 5.4/5.3")
+    return false
+end
 
 function polaris.analytics.addEvent(name)
     polaris.analytics.boot[name] = { uptime = computer.uptime(), clock = os.clock() }
@@ -77,7 +81,7 @@ end
 
 if debugMode == true then function _G.klog(...) log(...) end end
 
-log("log initialized for " .. tostring(polaris.version.kernel))
+log("klog initialized for polaris kernel version " .. tostring(polaris.version.kernel))
 log("Registered base modules: buffer, io, process, config, scheduler, log")
 
 -- Spawn kernel thread
