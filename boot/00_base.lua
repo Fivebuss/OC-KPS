@@ -1,6 +1,7 @@
 -- Extending functionality for stuff
 -- And modifying global stuff
 local process = polaris.process
+local filesystem = require("filesystem")
 polaris.analytics.addEvent("stage2")
 polaris.env = require("env")
 
@@ -57,7 +58,6 @@ end
 
 -- Lol reads the entire files contents
 local function readFile(path)
-    local filesystem = require("filesystem")
     local file, reason = filesystem.open(path, "r")
     if not file then
         return nil, reason or ("cannot open " .. tostring(path))
@@ -118,10 +118,22 @@ function os.execute(path, opts)
     end, opts)
 end
 
+-- This is incredibly bad
+if filesystem.exists("usr") then
+    for file in filesystem.list("/usr/etc") do
+        local name = file:gsub("/$", "")
+        filesystem.link("/usr/etc/" .. name, "/etc/" .. name)
+    end
+
+    for file in filesystem.list("/usr/etc/services") do
+        local name = file:gsub("/$", "")
+        filesystem.link("/usr/etc/services/" .. name, "/etc/services/" .. name)
+    end
+end
+
 -- mmmmmm syscalls
 
 local function unmountAll()
-    local filesystem = require("filesystem")
     local mounts = {}
 
     for fs, path in filesystem.mounts() do

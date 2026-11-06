@@ -23,11 +23,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-# Termio/readline is inspired and loosely based on Ocawesome101's cynosure and ulOS 1's systems.
-## It's license is hilariously open so I wont include it here. However the most egregious of my copying is at:
+### Termio/readline is inspired and loosely based on Ocawesome101's cynosure and ulOS 1's systems
+It's license is hilariously open so I wont include it here. However the most egregious of my copying is at:
 ``/sys/kernel/modules/tty.lua`` which is nearly a direct port only with some changes. Seriously, big thanks to Ocawesome101!
 
-## /bin/tar.lua is a port of mpmxyz's tar program:
+### /bin/tar.lua is a port of mpmxyz's tar program:
 ``https://github.com/mpmxyz/ocprograms/blob/master/home/bin/tar.lua``
 
 ```
@@ -53,7 +53,34 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-## /usr/* is a susbstantial rewrite, port and general just update of AR2000AR's osnetwork:
+
+### /lib/ksh/getopt and /bin/grep.lua is a nearly 1:! port of Wobb's getopt and grep:
+``https://github.com/OpenPrograms/Wobbo-Programs/tree/master``
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2014 Rene "Wobbo" Mellema
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### /usr/* is a susbstantial rewrite, port and general just update of AR2000AR's osnetwork:
 
 ```
 Mozilla Public License Version 2.0

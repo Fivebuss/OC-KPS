@@ -8,8 +8,9 @@
 --[[
 
 Lsched
-Cooperative multitasking. Kinda. It uses a lua GC trick where a coroutine reference missing causes it to silently die, so kill actually works. Thats it.
-
+Cooperative multitasking. KILL (in mineOS where v1 is from) used to be able to kill a while true loop even without yielding
+However it apparently doesn't work here so it's just a rather generic scheduler
+Hopefully(?) learn how to keep this as it allows for preemptive kill which is VERY nice
 
 --]]
 
