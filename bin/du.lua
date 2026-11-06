@@ -35,12 +35,10 @@ for opt, val in getopt(args or {}, opts, longopts) do
         if not maxDepth then
             io.writelnError("du: invalid argument to -d: '" .. tostring(val) .. "'")
             os.exit(1)
-            return
         end
     elseif opt == "?" then
         io.writelnError("du: invalid option -- '" .. val .. "'")
         os.exit(1)
-        return
     end
 end
 
@@ -111,7 +109,9 @@ local function visit(rpath, depth)
                     end
                 end
             end
-            coroutine.yield()
+            if coroutine.yield() == "INT" then
+                os.exit(130)
+            end
         end
 
         -- ./
@@ -139,7 +139,6 @@ for _, targetStr in ipairs(targets) do
     if not filesystem.exists(fullPath) then
         io.writelnError("du: cannot access '" .. targetStr .. "': No such file or directory")
         os.exit(1)
-        return
     elseif filesystem.isDirectory(fullPath) then
         local total = visit(targetStr, 0)
         combined = combined + total
@@ -150,7 +149,10 @@ for _, targetStr in ipairs(targets) do
         printSize(size, targetStr)
         combined = combined + size
     end
-    coroutine.yield()
+
+    if coroutine.yield() == "INT" then
+        os.exit(130)
+    end
 end
 
 if grandTotal then

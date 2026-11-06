@@ -29,14 +29,19 @@ local out = str .. suffix
 if modeChunk then
     while true do
         io.write(out)
-        coroutine.yield()
+        if coroutine.yield() == "INT" then
+            os.exit(130)
+        end
     end
 else
     local buffer = ""
     while true do
         buffer = buffer .. out
         if #buffer >= 16 then
-            coroutine.yield()
+            local sig = coroutine.yield()
+            if sig == "INT" then
+                os.exit(130)
+            end
             io.write(buffer)
             buffer = ""
         end

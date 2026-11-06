@@ -57,13 +57,20 @@ local function chunkRead()
         local chunk = io.stdin:read(2048)
         if not chunk then break end
 
+        if chunk == "INT" and not ignoreInt then
+            os.exit(130)
+        end
+
         if process.isSignal(chunk) then
             if not ignoreInt then break end
         else
             writeAll(chunk)
         end
 
-        coroutine.yield()
+        local sig = coroutine.yield()
+        if sig == "INT" and not ignoreInt then
+            os.exit(130)
+        end
     end
 end
 
@@ -72,13 +79,20 @@ local function lineRead()
         local line, _, noNewline = io.read("l")
         if not line then break end
 
+        if line == "INT" and not ignoreInt then
+            os.exit(130)
+        end
+
         if process.isSignal(line) then
             if not ignoreInt then break end
         else
             writeAll(noNewline and line or (line .. "\n"))
         end
 
-        coroutine.yield()
+        local sig = coroutine.yield()
+        if sig == "INT" and not ignoreInt then
+            os.exit(130)
+        end
     end
 end
 

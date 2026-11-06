@@ -8,7 +8,6 @@ local args = { ... }
 if #args < 2 or type(args[1]) ~= "string" then
     io.stderr:writeln("createchild: Invalid arguements")
     os.exit(1)
-    return false
 end
 
 local child = function()

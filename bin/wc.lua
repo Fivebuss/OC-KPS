@@ -24,7 +24,6 @@ for opt, val in getopt(args, "lcmw", {}) do
     elseif opt == "?" then
         io.writelnError("wc: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
-        return
     end
 end
 
@@ -71,6 +70,9 @@ local function processStdin()
         local chunk = io.stdin:read(chunkSize)
 
         while chunk do
+            if chunk == "INT" then
+                os.exit(130)
+            end
             if process.isSignal(chunk) then break end
 
             local lines, words, bytes, chars = countData(chunk)
@@ -81,7 +83,10 @@ local function processStdin()
 
             chunkCount = chunkCount + 1
             if chunkCount % 4 == 0 then
-                coroutine.yield()
+                local sig = coroutine.yield()
+                if sig == "INT" then
+                    os.exit(130)
+                end
             end
 
             chunk = io.stdin:read(chunkSize)
@@ -92,6 +97,9 @@ local function processStdin()
             local line, _, noNewline = io.read("l")
             if not line then break end
 
+            if line == "INT" then
+                os.exit(130)
+            end
             if process.isSignal(line) then break end
 
             local data = noNewline and line or (line .. "\n")
@@ -103,7 +111,10 @@ local function processStdin()
 
             lineCount = lineCount + 1
             if lineCount % 64 == 0 then
-                coroutine.yield()
+                local sig = coroutine.yield()
+                if sig == "INT" then
+                    os.exit(130)
+                end
             end
         end
     end
@@ -147,7 +158,10 @@ local function processFile(target)
 
         chunkCount = chunkCount + 1
         if chunkCount % 4 == 0 then
-            coroutine.yield()
+            local sig = coroutine.yield()
+            if sig == "INT" then
+                os.exit(130)
+            end
         end
 
         chunk = handle:read(chunkSize)
@@ -191,7 +205,11 @@ for _, target in ipairs(targets) do
         grandTotalChars = grandTotalChars + chars
         fileCount = fileCount + 1
     end
-    coroutine.yield()
+
+    local sig = coroutine.yield()
+    if sig == "INT" then
+        os.exit(130)
+    end
 end
 
 if fileCount > 1 then

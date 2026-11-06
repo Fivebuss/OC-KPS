@@ -683,12 +683,10 @@ local function main(...)
             io.writelnError("tar: unrecognized option '" .. tostring(value) .. "'")
             io.writelnError(USAGE_TEXT)
             os.exit(1)
-            return
         elseif opt == ":" then
             io.writelnError("tar: option '" .. tostring(value) .. "' requires an argument")
             io.writelnError(USAGE_TEXT)
             os.exit(1)
-            return
         end
     end
     --quick help
@@ -823,7 +821,6 @@ local ok, msg = xpcall(main, errorFormatter, ...)
 if not ok then
     io.writelnError(msg)
     os.exit(1)
-    return
 else
     os.exit(0)
 end

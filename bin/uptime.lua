@@ -19,7 +19,6 @@ for opt, val in getopt(args, "prs", {}) do
     elseif opt == "?" then
         io.writelnError("uptime: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
-        return
     end
 end
 
@@ -31,7 +30,6 @@ if since then modes = modes + 1 end
 if modes > 1 then
     io.writelnError("uptime: -p, -r and -s are mutually exclusive")
     os.exit(1)
-    return
 end
 
 if pretty then

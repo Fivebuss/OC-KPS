@@ -17,20 +17,17 @@ if #args == 2 then
         ) then
         io.writelnError("mount: invalid filesystem address")
         os.exit(1)
-        return false
     end
 
     if component.type(address) ~= "filesystem" then
         io.writelnError("mount: component address is not a filesystem")
         os.exit(1)
-        return false
     end
 
     if type(path) ~= "string"
         or not path:match("^/.*$") then
         io.writelnError("mount: mount point must be an absolute path")
         os.exit(1)
-        return false
     end
 
     local ok, err = filesystem.mount(address, path)
@@ -38,7 +35,6 @@ if #args == 2 then
     if not ok then
         io.writelnError("mount: filesystem error: " .. tostring(err))
         os.exit(1)
-        return false
     end
 elseif #args == 3 and args[1] == "-b" then
     local source_path = args[2]
@@ -47,13 +43,11 @@ elseif #args == 3 and args[1] == "-b" then
     if type(source_path) ~= "string" or not source_path:match("^/.*$") then
         io.writelnError("mount: source path must be an absolute path")
         os.exit(1)
-        return false
     end
 
     if type(target_path) ~= "string" or not target_path:match("^/.*$") then
         io.writelnError("mount: target path must be an absolute path")
         os.exit(1)
-        return false
     end
 
     -- Bind mount
@@ -61,20 +55,17 @@ elseif #args == 3 and args[1] == "-b" then
     if not proxy then
         io.writelnError("mount: failed to create bind proxy: " .. tostring(err))
         os.exit(1)
-        return false
     end
 
     local ok, mount_err = filesystem.mount(proxy, target_path)
     if not ok then
         io.writelnError("mount: filesystem error: " .. tostring(mount_err))
         os.exit(1)
-        return false
     end
 else
     io.writelnError("mount: invalid arguments")
     io.writelnError("Usage: mount [-b] (path or address) (target path)")
     os.exit(1)
-    return false
 end
 
 os.exit(0)

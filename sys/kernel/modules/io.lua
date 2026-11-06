@@ -375,7 +375,9 @@ function pipeMt.__index:write(...)
         and not self._closedWrite do
         self._writerUid = self._scheduler.activeThread()
         local v = self._scheduler.waitForInput()
-        if self._scheduler.isSignal(v) then
+        if v == "INT" then
+            return self._scheduler.exit(130)
+        elseif self._scheduler.isSignal(v) then
             return false
         end
     end
@@ -441,7 +443,9 @@ function pipeMt.__index:read(count)
 
         self._readerUid = self._scheduler.activeThread()
         local v = self._scheduler.waitForInput()
-        if self._scheduler.isSignal(v) then
+        if v == "INT" then
+            return self._scheduler.exit(130)
+        elseif self._scheduler.isSignal(v) then
             return nil, v
         end
     end
@@ -488,7 +492,10 @@ function pipeMt.__index:readLine()
         end
 
         self._readerUid = self._scheduler.activeThread()
-        self._scheduler.waitForInput()
+        local v = self._scheduler.waitForInput()
+        if v == "INT" then
+            return self._scheduler.exit(130)
+        end
     end
 end
 

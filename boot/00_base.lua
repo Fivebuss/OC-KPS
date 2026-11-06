@@ -18,11 +18,9 @@ end
 
 -- os.exit
 function os.exit(code)
-    if code == nil or code < 0 or code > 255 then
-        code = 0
+    if not process.exit(code) then
+        error("os.exit called outside a process")
     end
-    process.exit(code)
-    return false
 end
 
 -- Does two things, destroys old managed _ENVs and it determines which one to copy

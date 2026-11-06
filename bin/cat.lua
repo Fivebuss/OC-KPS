@@ -18,6 +18,9 @@ local function chunkRead(reader)
         count = count + 1
         if count % 4 == 0 then
             local sig = coroutine.yield()
+            if sig == "INT" then
+                os.exit(130)
+            end
             if sig and process.isSignal(sig) then break end
         end
 
@@ -31,12 +34,20 @@ local function readStdin()
         local line, _, noNewline = io.read("l")
         if not line then break end
 
+        if line == "INT" then
+            os.exit(130)
+        end
+
         -- Lmao how is a signal coming as a line?
         if process.isSignal(line) then break end
 
         io.write(noNewline and line or (line .. "\n"))
         io.flush()
-        coroutine.yield()
+
+        local sig = coroutine.yield()
+        if sig == "INT" then
+            os.exit(130)
+        end
     end
 end
 

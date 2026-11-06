@@ -37,13 +37,11 @@ local findPat = ""
 if not ctty then
     io.writeError("kedit: no controlling terminal")
     os.exit(1)
-    return
 end
 
 if #args < 1 then
     io.writeError("usage: kedit FILE")
     os.exit(1)
-    return
 end
 
 local target = args[1]
@@ -663,7 +661,6 @@ session:flush()
 
 if loadFile() == false then
     os.exit(1)
-    return
 end
 if buffer == nil then buffer = { "" } end
 

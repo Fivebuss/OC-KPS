@@ -38,7 +38,6 @@ for opt, val in getopt(args or {}, opts, longopts) do
     elseif opt == "?" then
         io.writelnError("ls: invalid option -- '" .. val .. "'")
         os.exit(1)
-        return
     end
 end
 

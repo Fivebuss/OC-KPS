@@ -202,7 +202,10 @@ function tty.new(gpu, keyboard_addrs)
         self:flush()
 
         while (not sfind(self.rb, "\n", 1, true)) and len(self.rb) < n and not sfind(self.rb, "\4", 1, true) do
-            coroutine.yield()
+            local sig = coroutine.yield()
+            if sig == "INT" then
+                process.exit(130)
+            end
         end
 
         local eof_pos = sfind(self.rb, "\4", 1, true)
@@ -221,7 +224,10 @@ function tty.new(gpu, keyboard_addrs)
     function self:readLine()
         self:flush()
         while not sfind(self.rb, "\n", 1, true) and not sfind(self.rb, "\4", 1, true) do
-            coroutine.yield()
+            local sig = coroutine.yield()
+            if sig == "INT" then
+                process.exit(130)
+            end
         end
         if sfind(self.rb, "\4", 1, true) then
             self.rb = ""

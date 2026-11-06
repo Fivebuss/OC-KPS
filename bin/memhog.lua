@@ -15,14 +15,12 @@ for i = 1, #args do
     else
         io.stderr:write("Usage: memhog [-v] <bytes|max> [-v]\n")
         os.exit(1)
-        return
     end
 end
 
 if target == nil then
     io.stderr:write("Usage: memhog [-v] <bytes|max> [-v]\n")
     os.exit(1)
-    return
 end
 
 local maxMode = target == "max"
@@ -33,7 +31,6 @@ if not maxMode then
     if not target or target < 0 then
         io.stderr:write("Expected a non-negative byte count or 'max'\n")
         os.exit(1)
-        return
     end
 
     target = math.floor(target)
@@ -67,7 +64,6 @@ end
 
 if not maxMode and target == 0 then
     os.exit(0)
-    return
 end
 
 while maxMode or allocated < target do
@@ -119,7 +115,6 @@ while maxMode or allocated < target do
             end
 
             os.exit(0)
-            return
         end
 
         allocations[#allocations + 1] = result
@@ -132,4 +127,3 @@ while maxMode or allocated < target do
 end
 
 os.exit(0)
-return

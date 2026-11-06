@@ -78,6 +78,9 @@ end
 
 local function yield()
     local sig = coroutine.yield()
+    if sig == "INT" then
+        os.exit(130)
+    end
     return sig and process.isSignal(sig)
 end
 
@@ -166,6 +169,10 @@ local function linesHandle(handle, remaining)
             break
         end
 
+        if line == "INT" then
+            os.exit(130)
+        end
+
         if process.isSignal(line) then
             break
         end
@@ -193,6 +200,10 @@ local function processStdin()
                 break
             end
 
+            if line == "INT" then
+                os.exit(130)
+            end
+
             if process.isSignal(line) then
                 break
             end
@@ -215,6 +226,10 @@ local function processStdin()
 
             if not chunk or #chunk == 0 then
                 break
+            end
+
+            if chunk == "INT" then
+                os.exit(130)
             end
 
             if not io.write(chunk) then

@@ -13,14 +13,12 @@ for opt, val in getopt(args, "i", {}) do
     elseif opt == "?" then
         io.writelnError("mv: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
-        return
     end
 end
 
 if #args < 2 then
     io.writelnError("mv: missing operand")
     os.exit(1)
-    return
 end
 
 local sources = {}
@@ -35,13 +33,11 @@ local targetIsDir = targetExists and filesystem.isDirectory(target)
 if #sources > 1 and not targetIsDir then
     io.writelnError("mv: target '" .. args[#args] .. "' is not a directory")
     os.exit(1)
-    return
 end
 
 if #sources > 1 and not targetExists then
     io.writelnError("mv: target '" .. args[#args] .. "' does not exist")
     os.exit(1)
-    return
 end
 
 -- Apparently it doesnt support this...
@@ -106,5 +102,8 @@ for _, source in ipairs(sources) do
             io.writelnError("mv: failed to move '" .. source .. "' to '" .. dest .. "': " .. tostring(reason))
         end
     end
-    coroutine.yield()
+
+    if coroutine.yield() == "INT" then
+        os.exit(130)
+    end
 end

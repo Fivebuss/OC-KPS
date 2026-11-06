@@ -25,14 +25,12 @@ for opt, val in getopt(args or {}, opts, longopts) do
     elseif opt == "?" then
         io.writelnError("stat: invalid option -- '" .. val .. "'")
         os.exit(1)
-        return
     end
 end
 
 if #args == 0 then
     io.writelnError("stat: missing operand")
     os.exit(1)
-    return
 end
 
 local function proxyCall(fs, method)
@@ -176,5 +174,4 @@ end
 
 if anyFailed then
     os.exit(1)
-    return
 end

@@ -56,7 +56,7 @@ If you really care, clone this repo and remove .git definitely and /usr and /etc
 
 ## Roadmap
 Mostly just finishing aformentioned gaps but here:
-* more coreutils (dd for one)
+* more coreutils (literally any string utils for one)
 * PTS/PTY
 * Installer + Release system
 * tar package system for optional things, notably networking and multi-gpu as the mgpu driver (only one right now) is very slow due to OC component call times

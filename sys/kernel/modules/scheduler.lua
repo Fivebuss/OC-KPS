@@ -497,24 +497,7 @@ function scheduler.exit(code)
     t.exiting = true
     t.exitCode = code
 
-    -- Wake up if sleeping
-    if t.wakeAt ~= nil then
-        t.wakeAt = 0
-    end
-
-    -- Unblock input
-    if t.waiting then
-        t.waiting = false
-
-        t.eventFilter = nil
-        t.eventDeadline = nil
-        t.resumeArgs = nil
-
-        t.hasResume = true
-        t.resumeVal = nil
-    end
-
-    return true
+    return coroutine_yield("exit", code) -- probably important we actually exit lmao
 end
 
 -- Check cancellation flag for any cid

@@ -16,7 +16,6 @@ for _, arg in ipairs(args) do
         io.writelnError("mounts: unknown option: " .. arg)
         io.writelnError("Usage: mounts [-m]")
         os.exit(1)
-        return
     end
 end
 

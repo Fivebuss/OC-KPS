@@ -8,7 +8,6 @@ for _, arg in ipairs(args) do
         io.writelnError("touch: invalid option -- '" .. arg:sub(2, 2) .. "'")
         io.writelnError("Usage: touch <path>...")
         os.exit(1)
-        return false
     else
         table.insert(files, arg)
     end
@@ -18,7 +17,6 @@ if #files == 0 then
     io.writelnError("touch: missing file operand")
     io.writelnError("Usage: touch <path>...")
     os.exit(1)
-    return false
 end
 
 local hasError = false
@@ -45,7 +43,6 @@ end
 
 if hasError then
     os.exit(1)
-    return false
 end
 
 os.exit(0)

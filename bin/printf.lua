@@ -143,7 +143,6 @@ local rawTargets = args or {}
 if #rawTargets == 0 then
     io.writelnError("printf: missing format string")
     os.exit(1)
-    return
 end
 
 -- Strip quotes from arguments if passed directly from raw shell parsing layers
@@ -179,7 +178,6 @@ repeat
             if i == len then
                 io.writelnError("printf: trailing backslash in format string")
                 os.exit(1)
-                return
             end
             local nxt = fmt:sub(i + 1, i + 1)
             -- spam musubi
@@ -209,7 +207,6 @@ repeat
                 if not hex then
                     io.writelnError("printf: invalid hex escape sequence")
                     os.exit(1)
-                    return
                 end
                 local code = tonumber(hex, 16)
                 output[#output + 1] = utf8Char(code)
@@ -219,7 +216,6 @@ repeat
                 if not hex then
                     io.writelnError("printf: invalid unicode escape sequence")
                     os.exit(1)
-                    return
                 end
                 local code = tonumber(hex, 16)
                 output[#output + 1] = utf8Char(code)
@@ -227,7 +223,6 @@ repeat
             else
                 io.writelnError("printf: unknown escape sequence '\\" .. nxt .. "'")
                 os.exit(1)
-                return
             end
         elseif c == "%" then
             if fmt:sub(i + 1, i + 1) == "%" then
@@ -277,7 +272,6 @@ repeat
                     if err then
                         io.writelnError("printf: " .. err)
                         os.exit(1)
-                        return
                     end
                     local wNumVal = tonumber(wVal) or 0
                     if wNumVal < 0 then
@@ -304,7 +298,6 @@ repeat
                         if err then
                             io.writelnError("printf: " .. err)
                             os.exit(1)
-                            return
                         end
                         local prNumVal = tonumber(prVal)
                         if prNumVal and prNumVal >= 0 then
@@ -318,7 +311,6 @@ repeat
                 if pos1 > len then
                     io.writelnError("printf: incomplete format specifier")
                     os.exit(1)
-                    return
                 end
 
                 local typeChar = fmt:sub(pos1, pos1)
@@ -329,7 +321,6 @@ repeat
                 if err then
                     io.writelnError("printf: " .. err)
                     os.exit(1)
-                    return
                 end
 
                 local formattedStr = ""
@@ -355,7 +346,6 @@ repeat
                         if num % 1 ~= 0 then
                             io.writelnError("printf: expected integer, got float")
                             os.exit(1)
-                            return
                         end
                         formattedStr = (flags.hash and "0b" or "") .. toBinary(num)
                     else
@@ -363,7 +353,6 @@ repeat
                         if expErr and expErr ~= "halt" then
                             io.writelnError("printf: " .. expErr)
                             os.exit(1)
-                            return
                         end
                         formattedStr = expanded or ""
                     end
@@ -372,7 +361,6 @@ repeat
                     if not num or num % 1 ~= 0 then
                         io.writelnError("printf: expected integer, got '" .. tostring(rawVal) .. "'")
                         os.exit(1)
-                        return
                     end
                     if typeChar == "d" or typeChar == "i" then
                         local sign = ""
@@ -410,7 +398,6 @@ repeat
                 else
                     io.writelnError("printf: unknown conversion specifier '%" .. typeChar .. "'")
                     os.exit(1)
-                    return
                 end
 
                 local displayWidth = uWLen(formattedStr)

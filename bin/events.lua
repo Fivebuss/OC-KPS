@@ -9,6 +9,10 @@ require("process").sleep(0.5)
 while true do
     local e = {event.pull()}
 
+    if e[1] == "INT" then
+        os.exit(130)
+    end
+
     io.write(tostring(computer.uptime()))
 
     for i = 1, #e do
@@ -16,5 +20,8 @@ while true do
     end
 
     io.write("\n")
-    coroutine.yield()
+
+    if coroutine.yield() == "INT" then
+        os.exit(130)
+    end
 end

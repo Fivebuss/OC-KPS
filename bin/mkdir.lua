@@ -16,7 +16,6 @@ for _, arg in ipairs(args) do
                 io.writelnError("mkdir: invalid option -- '" .. char .. "'")
                 io.writelnError("Usage: mkdir [-v] <path>...")
                 os.exit(1)
-                return false
             end
         end
     else
@@ -28,7 +27,6 @@ if #paths == 0 then
     io.writelnError("mkdir: missing operand")
     io.writelnError("Usage: mkdir [-v] <path>...")
     os.exit(1)
-    return false
 end
 
 for _, rawTarget in ipairs(paths) do
@@ -44,7 +42,6 @@ for _, rawTarget in ipairs(paths) do
             rawTarget .. "': " .. tostring(err)
         )
         os.exit(1)
-        return false
     end
 
     if verbose then

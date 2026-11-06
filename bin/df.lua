@@ -20,7 +20,6 @@ for opt, val in getopt(args or {}, opts, longopts) do
     elseif opt == "?" then
         io.writelnError("df: invalid option -- '" .. val .. "'")
         os.exit(1)
-        return
     end
 end
 
@@ -66,7 +65,6 @@ else
         if not proxy then
             io.writelnError("df: " .. targetStr .. ": no such file or directory")
             os.exit(1)
-            return
         end
         if not mounts[proxy] or #path < #mounts[proxy] then
             mounts[proxy] = path
@@ -104,7 +102,10 @@ for proxy, path in pairs(mounts) do
         percent,
         path,
     }
-    coroutine.yield()
+
+    if coroutine.yield() == "INT" then
+        os.exit(130)
+    end
 end
 
 local colWidths = {}

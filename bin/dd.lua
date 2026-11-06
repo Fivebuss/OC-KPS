@@ -76,7 +76,6 @@ for _, arg in ipairs(args) do
     else
         io.writelnError("dd: invalid argument: " .. arg)
         os.exit(1)
-        return
     end
 end
 
@@ -126,19 +125,16 @@ if ofile then ofile = resolvePath(ofile) end
 if status ~= "none" and status ~= "noxfer" and status ~= "progress" then
     io.writelnError("dd: invalid status level: " .. status)
     os.exit(1)
-    return
 end
 
 -- Direct mode really just for speed
 if useDirect and not ifile then
     io.writelnError("dd: direct mode requires if=FILE")
     os.exit(1)
-    return
 end
 if useDirect and not ofile then
     io.writelnError("dd: direct mode requires of=FILE")
     os.exit(1)
-    return
 end
 
 -- Open input
@@ -153,7 +149,6 @@ if ifile then
     if not inHandle then
         io.writelnError("dd: " .. ifile .. ": " .. tostring(inReason))
         os.exit(1)
-        return
     end
     inIsFile = true
 else
@@ -168,7 +163,6 @@ if skip > 0 and inIsFile then
         io.writelnError("dd: skip error: " .. tostring(err))
         inHandle:close()
         os.exit(1)
-        return
     end
 end
 
@@ -185,7 +179,6 @@ if ofile then
         io.writelnError("dd: " .. ofile .. ": " .. tostring(outReason))
         if inIsFile then inHandle:close() end
         os.exit(1)
-        return
     end
     outIsFile = true
 else
@@ -201,7 +194,6 @@ if seek > 0 and outIsFile then
         if inIsFile then inHandle:close() end
         if outIsFile then outHandle:close() end
         os.exit(1)
-        return
     end
 end
 
@@ -226,7 +218,6 @@ while true do
         if inIsFile then inHandle:close() end
         if outIsFile then outHandle:close() end
         os.exit(1)
-        return
     end
     blocksWritten = blocksWritten + 1
 end

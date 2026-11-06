@@ -16,7 +16,6 @@ if #args < 1 and not printRomFlag then
     io.writeln(" l: print current contents of installed EEPROM.")
     io.writeln(" r: save the current contents of installed EEPROM to file.")
     os.exit(1)
-    return
 end
 
 for opt, val in getopt(args, shortSpec) do
@@ -50,6 +49,9 @@ local function chunkRead(reader)
         count = count + 1
         if count % 4 == 0 then
             local sig = coroutine.yield()
+            if sig == "INT" then
+                os.exit(130)
+            end
             if sig and process.isSignal(sig) then break end
         end
 
@@ -62,8 +64,14 @@ local function readConfirm(prompt)
     while true do
         local line, _, noNewline = io.read("l")
         if not line then return false end
+        if line == "INT" then
+            os.exit(130)
+        end
         if process.isSignal(line) then return false end
-        coroutine.yield()
+        local sig = coroutine.yield()
+        if sig == "INT" then
+            os.exit(130)
+        end
         if line:lower():sub(1, 1) == "y" then return true end
     end
 end
@@ -169,10 +177,16 @@ local function writeRom()
     if not quiet and not label then
         io.writeln("Enter new label for this EEPROM. Leave input blank to leave the label unchanged.")
         local line, _, noNewline = io.read("l")
+        if line == "INT" then
+            os.exit(130)
+        end
         if line and not process.isSignal(line) then
             label = line
         end
-        coroutine.yield()
+        local sig = coroutine.yield()
+        if sig == "INT" then
+            os.exit(130)
+        end
     end
 
     if label and #label > 0 then
@@ -205,5 +219,4 @@ end
 if reason then
     io.writelnError(reason)
     os.exit(1)
-    return
 end

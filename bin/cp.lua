@@ -18,14 +18,12 @@ for opt, val in getopt(args, "iRrf", {}) do
     elseif opt == "?" then
         io.writelnError("cp: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
-        return
     end
 end
 
 if #args < 2 then
     io.writelnError("cp: missing operand")
     os.exit(1)
-    return
 end
 
 local sources = {}
@@ -40,7 +38,6 @@ local targetIsDir = targetExists and filesystem.isDirectory(target)
 if #sources > 1 and not targetIsDir then
     io.writelnError("cp: target '" .. args[#args] .. "' is not a directory")
     os.exit(1)
-    return
 end
 
 -- Apparently it doesnt support this...
@@ -104,5 +101,8 @@ for _, source in ipairs(sources) do
             end
         end
     end
-    coroutine.yield()
+
+    if coroutine.yield() == "INT" then
+        os.exit(130)
+    end
 end
