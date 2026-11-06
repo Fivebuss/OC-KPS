@@ -8,6 +8,7 @@ local computer = require("computer")
 local term = {}
 
 local len = unicode.len
+local wlen = unicode.wlen or unicode.len
 local mmax, mmin = math.max, math.min
 local sfind, ssub = string.find, string.sub
 
@@ -326,7 +327,7 @@ function writeline(t, rline)
         local to_write
         rline, to_write = pop(rline, t.w - t.cx + 1)
         t.gpu.set(t.cx, t.cy, to_write)
-        t.cx = t.cx + len(to_write)
+        t.cx = t.cx + wlen(to_write)
         wrapped = t.cx > t.w
         wrapCursor(t)
     end

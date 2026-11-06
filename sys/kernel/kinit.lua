@@ -15,6 +15,8 @@ _G._OSVERSION = nil
 polaris.syscalls = {}
 polaris.config = {}
 polaris.analytics = { boot = {} }
+polaris.gpu = _G.gpu
+_G.gpu = nil
 
 status("kinit exec, initializing kernel")
 if _VERSION == "Lua 5.2" then

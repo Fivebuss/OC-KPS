@@ -119,3 +119,62 @@ function os.execute(path, opts)
         return fn()
     end, opts)
 end
+
+-- mmmmmm syscalls
+
+local function unmountAll()
+    local filesystem = require("filesystem")
+    local mounts = {}
+
+    for fs, path in filesystem.mounts() do
+        if path ~= "/" and path ~= "/dev" and path ~= "/proc" and path ~= "/tmp" then
+            mounts[#mounts + 1] = path
+        end
+    end
+
+    -- Yes. We count bind mounts.
+    table.sort(mounts, function(a, b)
+        local da = select(2, a:gsub("/", ""))
+        local db = select(2, b:gsub("/", ""))
+
+        if da == db then
+            return #a > #b
+        end
+
+        return da > db
+    end)
+
+    local results = {}
+
+    for _, path in ipairs(mounts) do
+        local ok, result, reason = pcall(filesystem.umount, path)
+
+        results[path] = {
+            success = ok and result ~= false,
+            reason = not ok and result or reason,
+        }
+    end
+
+    return results
+end
+
+-- c
+polaris.sysrq.register(99, function()
+    -- computer.beep(1000)
+    -- polaris.panic()
+    computer.beep(2000)
+    computer.beep(2000)
+    polaris.panic()
+end)
+-- o
+polaris.sysrq.register(111, function()
+    computer.shutdown()
+end)
+-- u
+polaris.sysrq.register(117, function()
+    polaris.log("Sysrq: Unmounting user mounts")
+    local ok, result = unmountAll()
+    if result ~= false then
+        polaris.log("Failed ummountall(): " .. reason)
+    end
+end)

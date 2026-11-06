@@ -911,6 +911,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                             if builtin then
                                 return builtin(argv(seg.args), process.input(), {
                                     write = function(_, ...) return process.write(...) end,
+                                    flush = function() return process.output():flush() end,
                                     close = function() end,
                                 }, {
                                     write = function(_, ...) return process.writeError(...) end,

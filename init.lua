@@ -122,11 +122,6 @@ status("Executing stage 2 boot")
 -- Lets load them all at once to save time
 local bootScripts = assert(dofile("/boot/bootscripts.lua"))
 
-if polaris.config["debug"] == true then
-    _G.polaris.debug = {}
-    _G.polaris.debug.print = status
-end
-
 -- So they are in order
 local bootNames = {}
 for name in pairs(bootScripts) do
@@ -142,6 +137,7 @@ for i = 1, #bootNames do
     end
     chunk()
 end
+if polaris.config and polaris.config["debug"] ~= true then _G.status = nil end
 
 -- Enter scheduler loop
 -- No matter what you do, no matter how hard you try you will always be in a busy loop lmao

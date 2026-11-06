@@ -651,9 +651,9 @@ function process.create(pid, stdin, stdout, stderr)
     checkArg(1, pid, "number")
 
     processIO[pid] = {
-        [0] = io.newDescriptor(polaris.buffer.new("r", stdin)),
-        [1] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("w", stdout))),
-        [2] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("w", stderr))),
+        [0] = io.newDescriptor(polaris.buffer.new("rb", stdin)),
+        [1] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("wb", stdout))),
+        [2] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("wb", stderr))),
     }
 end
 

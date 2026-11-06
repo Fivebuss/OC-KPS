@@ -131,7 +131,7 @@ local function writeRom()
 
     local file, reason = io.open(fullPath, "rb")
     if not file then
-        file, reason = io.open(fullPath, "r")
+        file, reason = io.open(fullPath, "rb")
     end
     if not file then
         io.writelnError("flash: " .. rawArg .. ": Cannot open file: " .. tostring(reason))

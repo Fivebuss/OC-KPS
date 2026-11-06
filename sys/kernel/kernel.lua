@@ -3,6 +3,7 @@
 assert(polaris.scheduler, "System failure: Kernel: scheduler not initialized")
 
 local scheduler = polaris.scheduler
+local event = require("event_internals")
 
 
 -- Actual syscalls
@@ -20,7 +21,7 @@ local function dispatch(req)
         return { ok = false, err = packed[2] }
     end
 
-    -- Pcall stuff
+    -- Do the thing
     local vals, n = {}, packed.n - 1
     for i = 1, n do
         vals[i] = packed[i + 1]
@@ -28,6 +29,60 @@ local function dispatch(req)
 
     return { ok = true, n = n, vals = vals }
 end
+
+-- Sysrq is not magic
+
+local sysrq = {}
+sysrq.actions = {}
+sysrq.active = false
+sysrq.startedAt = 0
+sysrq.timeout = 5
+
+function sysrq.register(char, fn)
+    sysrq.actions[char] = fn
+end
+
+polaris.sysrq = sysrq
+
+local function sysrqKeyHandler(_, _, char, code, _)
+    local now = computer.uptime()
+
+    -- KP Enter
+    if code == 156 then
+        if not sysrq.active then
+            sysrq.active = true
+            sysrq.startedAt = now
+            computer.beep(1000)
+        else
+            sysrq.startedAt = now
+        end
+
+        return
+    end
+
+    if not sysrq.active then
+        return
+    end
+
+    if now - sysrq.startedAt >= sysrq.timeout then
+        sysrq.active = false
+        sysrq.startedAt = 0
+        computer.beep(1000)
+        return
+    end
+
+    -- Execute action
+    local action = sysrq.actions[char]
+
+    if action then
+        pcall(action)
+    end
+
+    sysrq.active = false
+    sysrq.startedAt = 0
+end
+
+local sysrqKeyId = event.listen("key_down", sysrqKeyHandler)
 
 local function kernelProcess()
     if _VERSION == "Lua 5.3" then

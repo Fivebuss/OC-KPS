@@ -5,31 +5,42 @@
 local filesystem = require("filesystem")
 local parser     = require("luaparser")
 local event      = require("event")
+local getopt     = require("ksh.getopt")
 
 local arglist    = args or {}
 
--- no args does both, -k builds kernel and -b builds boot scripts
 local doKernel   = true
 local doBoot     = true
 local doGc       = true
 local root       = "/"
-local i          = 1
-while i <= #arglist do
-    local a = arglist[i]
-    if a == "-k" then
-        doKernel = true
-        doBoot   = false
-    elseif a == "-b" then
-        doBoot   = true
-        doKernel = false
-    elseif a == "-f" then
+local optK       = false
+local optB       = false
+
+local shortSpec  = "kbfc"
+local longSpec   = {}
+
+for opt, val in getopt(arglist, shortSpec, longSpec) do
+    if opt == "k" then
+        optK = true
+    elseif opt == "b" then
+        optB = true
+    elseif opt == "f" then
         doGc = false
-        -- skip gc thing (I have enough memory!)
-        if i + 1 <= #arglist then i = i + 1 end
-    else
-        root = a
+    elseif opt == "c" then
+    elseif opt == "?" then
+        io.writelnError("kmake: unrecognized option '" .. tostring(val) .. "'")
+        os.exit(1)
     end
-    i = i + 1
+end
+
+if optK and not optB then
+    doBoot = false
+elseif optB and not optK then
+    doKernel = false
+end
+
+if #arglist > 0 then
+    root = arglist[1]
 end
 
 if root:sub(-1) == "/" then
@@ -57,8 +68,6 @@ end
 io.writeln("KPS Kmake V0.2")
 local startTime = computer.uptime()
 local startClock = os.clock()
-
--- Look how fancy I am
 
 local ESC = "\27"
 
@@ -103,7 +112,6 @@ local function updateProgressLine(items, idx, total)
     io.flush()
 end
 
--- Makes it embeddable into a file as a string
 local function escape(s)
     local out = {}
     local n = 0
@@ -166,14 +174,12 @@ local function readFile(path)
     return data
 end
 
--- Makes a file
 local function buildFile(label, moddir, outfile, varname, ...)
     local skip = {}
     for i = 1, select("#", ...) do
         skip[select(i, ...)] = true
     end
 
-    -- What do we have here?
     local files = {}
     for f in filesystem.list(moddir) do
         if f:sub(-4) == ".lua" and not skip[f] then
@@ -200,7 +206,6 @@ local function buildFile(label, moddir, outfile, varname, ...)
     end
     printProgressBlock(items)
 
-    -- read parse minify write
     local src, ast, result
     for idx, f in ipairs(files) do
         local name = f:sub(1, -5)
@@ -217,7 +222,6 @@ local function buildFile(label, moddir, outfile, varname, ...)
         items[idx].stage = 1
         updateProgressLine(items, idx, #items)
 
-        -- Thanks dumbluaparser
         ast, err = parser.parse(src, path)
         parser.clearCaches()
         runGc()
@@ -231,7 +235,6 @@ local function buildFile(label, moddir, outfile, varname, ...)
         items[idx].stage = 2
         updateProgressLine(items, idx, #items)
 
-        -- And for minifying
         parser.minify(ast)
         parser.clearCaches()
         runGc()
@@ -248,7 +251,6 @@ local function buildFile(label, moddir, outfile, varname, ...)
         items[idx].stage = 3
         updateProgressLine(items, idx, #items)
 
-        -- Write it
         out:write(varname .. "[\"" .. name .. "\"] = \"" .. escape(result) .. "\"\n")
         result = nil
         items[idx].stage = 4
@@ -284,7 +286,7 @@ if doBoot then
 end
 
 io.writeln("kmake: done (" ..
-total ..
-" total)\nfinished in " ..
-tostring(computer.uptime() - startTime) .. " seconds\nused " .. tostring(os.clock() - startClock) .. " CPU exec time")
+    total ..
+    " total)\nfinished in " ..
+    tostring(computer.uptime() - startTime) .. " seconds\nused " .. tostring(os.clock() - startClock) .. " CPU exec time")
 io.flush()
