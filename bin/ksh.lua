@@ -74,6 +74,7 @@ local shellState = {
     fgBusy = false,       -- true while a foreground pipeline is actually going
     gid = process.GID.FG, -- No jobs yet.
     asyncJobs = {},       -- wait
+    shellStartTime = computer.uptime(),
 }
 
 local function st()
@@ -597,6 +598,10 @@ local function parseSegment(words, getenv)
 end
 
 local builtins = {}
+local reservedKeywords = {
+    time = true,
+    -- better shell scripting soon(tm)
+}
 
 -- args[1] is back to being normal
 local function argv(segArgs)
@@ -1035,6 +1040,7 @@ local function snapshotState(gid)
         fgBusy = false,
         gid = gid or s.gid,
         asyncJobs = {},
+        shellStartTime = s.shellStartTime,
     }
     return copy
 end
@@ -1419,7 +1425,9 @@ builtins["type"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()
     local hasError = false
     for _, name in ipairs(args) do
-        if st().aliases[name] then
+        if reservedKeywords[name] then
+            stdout:write(name .. " is a reserved keyword\n")
+        elseif st().aliases[name] then
             stdout:write(name .. " is an alias for " .. st().aliases[name] .. "\n")
         elseif builtins[name] then
             stdout:write(name .. " is a shell builtin\n")
@@ -1431,6 +1439,29 @@ builtins["type"] = function(args, stdin, stdout, stderr)
                 stderr:write("ksh: type: " .. name .. ": not found\n")
                 hasError = true
             end
+        end
+    end
+
+    st().lastExitCode = hasError and 1 or 0
+end
+
+-- which? winch? witch
+builtins["which"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        stderr:write("ksh: which: no command specified\n")
+        st().lastExitCode = 1
+        return
+    end
+
+    local env = polaris.env.current()
+    local hasError = false
+    for _, name in ipairs(args) do
+        local cmdPath = resolveCommand(name, env.getenv)
+        if cmdPath then
+            stdout:write(cmdPath .. "\n")
+        else
+            stderr:write("ksh: which: " .. name .. ": not found\n")
+            hasError = true
         end
     end
 
@@ -1727,12 +1758,94 @@ local function splitAssignments(words)
     return assigns, rest
 end
 
+local function formatTime(seconds)
+    local m = math.floor(seconds / 60)
+    local s = seconds - m * 60
+    return string.format("%dm%.3fs", m, s)
+end
+
+-- Yes, this is seperate. Im lazy
+local function runTimedCommandGroup(rest, assigns, saved, savedNames, getenv)
+    local function restoreLocals()
+        if not savedNames then return end
+        for _, name in ipairs(savedNames) do
+            st().locals[name] = saved[name]
+        end
+    end
+
+    local pipeGroups = splitTokensOn(rest, "|")
+    local parsed = {}
+
+    for _, segTokens in ipairs(pipeGroups) do
+        local seg, err, isParamError = parseSegment(segTokens, getenv)
+        if not seg then
+            if isParamError then
+                writeRed(process.error(), "ksh: " .. err, "\n")
+                st().lastExitCode = 1
+            else
+                writeRed(process.error(), "ksh: syntax error: " .. err, "\n")
+                st().lastExitCode = 2
+            end
+            restoreLocals()
+            return
+        end
+        parsed[#parsed + 1] = seg
+    end
+
+    local first = parsed[1].args and parsed[1].args[1]
+
+    if #parsed == 1 and first and builtins[first] then
+        local seg = parsed[1]
+
+        local stdin, stdout, stderr, err = makeStreams(nil, nil, seg.redirects)
+
+        if err then
+            writeRed(process.error(), "ksh: " .. err, "\n")
+            st().lastExitCode = 1
+            restoreLocals()
+            return
+        end
+
+        local ok, builtinErr = xpcall(
+            function()
+                return builtins[first](
+                    argv(seg.args),
+                    stdin,
+                    stdout,
+                    stderr
+                )
+            end,
+            debug.traceback
+        )
+
+        if stdin then
+            stdin:close()
+        end
+        if stdout then
+            stdout:close()
+        end
+        if stderr then
+            stderr:close()
+        end
+
+        if not ok then
+            writeRed(process.error(), tostring(builtinErr), "\n")
+            st().lastExitCode = 1
+        end
+
+        restoreLocals()
+        return
+    end
+
+    runPipeline(parsed, saved and assigns, getenv)
+    restoreLocals()
+end
+
 -- Everything but && and ;
 local function runCommandGroup(words, getenv)
     local assigns, rest = splitAssignments(words)
 
     if #assigns > 0 and #rest == 0 then
-        -- $?
         local status = 0
         for _, a in ipairs(assigns) do
             local value, _, subStatus = expandToken(a.value, getenv)
@@ -1756,6 +1869,43 @@ local function runCommandGroup(words, getenv)
             st().locals[a.name] = expandToken(a.value, getenv)
         end
         words = rest
+    end
+
+    local hasTime = false
+    if #rest > 0 and rest[1] == "time" then
+        hasTime = true
+        table.remove(rest, 1)
+    end
+
+    if hasTime then
+        if #rest == 0 then
+            local shellStart = st().shellStartTime or computer.uptime()
+            local shellEnd = computer.uptime()
+            local realTime = shellEnd - shellStart
+
+            local stderr = ownStderr()
+            stderr:write("real\t", formatTime(realTime), "\n")
+            if stderr.flush then stderr:flush() end
+            st().lastExitCode = 0
+            return
+        end
+
+        local realStart = computer.uptime()
+        local cpuStart = os.clock()
+
+        runTimedCommandGroup(rest, assigns, saved, savedNames, getenv)
+
+        local realEnd = computer.uptime()
+        local cpuEnd = os.clock()
+
+        local realTime = realEnd - realStart
+        local sysTime = cpuEnd - cpuStart
+
+        local stderr = ownStderr()
+        stderr:write("real\t", formatTime(realTime), "\n")
+        stderr:write("sys\t", formatTime(sysTime), "\n")
+        if stderr.flush then stderr:flush() end
+        return
     end
 
     local function restoreLocals()

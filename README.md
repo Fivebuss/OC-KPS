@@ -1,51 +1,82 @@
-# Kinda-Posix system
-## I got no clue what else to call it. It's like if you try remembering unix off the top of your head
+# Kinda-Posix system (KPS)
+## Like if you tried recreating how unix works with a little bit of amnesia
+<sub>Better readme coming soon™</sub>
 
-### WIP! This is very early in development. It has a semi-functional kernel and barely a userspace
+### WIP! This is very early in development. There is no installer, and the kernel + userspace are quite lacking and unoptimized
 ### Polaris kernel features:
 * A scheduler and process setup, for real (No, I did not do the '''preemptive''' load() trick, too jank even for me)
 * A meh Console/tty/terminal emulator stack. Multiple-gpus and decent performance however
 * A ''better'' i/o system, it combines pipes into it and concurrent stuff, some optimizations. Potentially buggy? Yet to find out in long run
+* ^ By extension, stdio is real. Stop using print()!!!
 * garbage config and logging system
 * RC style services
-* Easy IPC and signal system. You can handle some of them if you want
+* Easy IPC and signal system. And some easy ways to handle signals
 * Extremely fast boot (<2 seconds for one gpu*)
-* A real sleep that is not the busy-wait polling nonsense like openOS does. It just suspends a coroutine and tell's scheduler to wake it up
+* A real sleep that is not the busy-wait polling nonsense like openOS does. It just suspends a coroutine and tell's scheduler to wake it upz
+* Each process get's their own _ENV but it's easily manageable
 * devfs + procfs are different than openOS (and actually exist for the latter)
+* neat name
 
 ### Userspace
-* ksh + utilities: A pretty "okay" shell, and a few coreutils, lacking a few though
+* KPS Shell: A pretty "okay" shell, surpassing openOS while being also worse
 * ksh features:
-* Supports brace formatting, env variable syntax (for real), all stream redirection types, exit codes, subshells, shell scripting (Unfinished), most builtins
-  * And a readline with the expected history/navigation but also the bash shortcuts (CTRL A/E, home, end, etc)
+* Syntax
+  * Group formatting
+  * Environment variable expansion
+  * subshells
+  * All stream redirection types
+  * Wildcard (*)
+* General
+  * Exit codes
+  * An actual shell pipeline that isn't sequential
+  * env variables are distinguished between the expected kinds
+  * Special variable support ($$)
+  * Basic shell scripting
+  * Multi-user
+  * A majority of builtins
   * CTRL D is real. Yes, it functions like bash. I hope. Most arduous part of this project believe it or not...
+* Readline
+  * The usual arrow key navigation and command history
+  * Works with unicode
+  * Supports a few bash shortcuts and keybinds:
+    * Home/End
+    * CTRL A/E
+    * CTRL L
+    * (Half broken) multi-line support
+  * Usable all over with little difficulty (It's a convuluted library)
 * Coreutils:
   * Most i/o tools (cat, tee, head, wc, tail, even printf*)
-  * a lua shell somewhat similiar to openOS's
+  * A lua shell somewhat similiar to openOS's
   * Basic FS tools (du, df, stat, rm, mv, cp, dd, etc)
-  * process tools (ps, pstree, kill, env)
-  * environment stuff (set, unset, alias, env, etc)
-  * Some specific system things, like memhog and gc (Abuses OpenOS trick to get more ram), you can ignore these
+  * Some process tools (ps, pstree, kill, env)
+  * Environment stuff (env, lua, ksh ``<file>`` to run)
   * mount tools including easy bind mounting
-  * user tools (addusr, users)
+  * User tools (addusr, users)
   * Two editors:
-    * An extremely basic text editor derived from ULOS 2's ``edit`` but with my own stuff added
-    * A syntax highlighting editor that is extremely slow and I will likely re-do sometime
+    * An extremely basic text editor derived from ULOS 2's ``edit`` but with my own stuff
+    * An optional syntax highlighting editor that is extremely slow and I will likely re-do sometime
   * a tar archiver and unarchiver. It's pretty neat, thanks mpmxyz
-  * other misc things that aren't worth mentioning
-* Alot of ram use. Seriously, alot. ~470k for one GPU lmao
+  * Some system-specific tools
+  * Other misc things that aren't worth mentioning
+* Alot of ram use. Seriously, alot. ~430k idle for one GPU lmao and boots needing ~480k
 
-#### Libraries
+#### Main libraries
 * event: openOS style but with changes, specifically they arrive now upon a scheduler tick
 * keyboard: merged openOS's keycodes and stuff into one. Seriously, no need to split
 * text: added shell syntax and other stuff to it, made a bit more performant
 * filesystem: does a few little things different but mostly same as openOS
 * component: 1:1 to openOS minus the GPU/kb handling
 * users: For multi-user things, login notably uses it
+* ksh
+  * (Only commands ran by ksh get this): console, gives current path and easy path resolving to the real path. You dont have to worry about * and such
+  * readline
+  * port of Wobbo's getopt but with --long-flag support
+  * condraw, a bugfixed version of PixelToast's consoleutils
 * termio: Terminal i/o reading, may be helpful for text editors (kedit uses it)
 * serialization: nearly 1:1 port of openOS's though with a few bugs fixed
-
-# Better readme coming soon(tm)
+* bit32 backwards compat
+* full keyboard library
+* My fork of DumbLuaParser (Feel free to remove it)
 
 ## System requirements
 Built for Tier2 and above. Seriously, it crashes with less memory often, and a tier 1 GPUI didnt even bother to support\
@@ -66,9 +97,11 @@ Mostly just finishing aformentioned gaps but here:
 * Ksh jobs and backgrounding, just need to do the shell-side of it
 * bugfix everything I can find
 * Optimization. Zero done yet really except boot times and major ram savings
+* **Actual release** and make documentation
 
 ## Lets talk security
-* It does not exist. Sure every process get's their own _ENV inherited from their parent. Sure multi-user exists but:
+* It does not exist.
+Sure multi-user exists but:
   * No passwords, it just exists for a seperated /home and for IPC reasons
   * Debug library I didnt bother touching nor any other exploits
   * I wont stop you from just killing PID 1 (kernel) if you want

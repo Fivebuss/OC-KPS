@@ -201,7 +201,6 @@ end
 local blocksRead = 0
 local blocksWritten = 0
 local bytesTotal = 0
-local startTime = computer.uptime()
 
 while true do
     if count and blocksRead >= count then break end
@@ -227,9 +226,8 @@ if outIsFile then outHandle:close() end
 
 -- Hey! it worked!
 if status == "progress" then
-    local endTime = computer.uptime() - startTime
     io.writelnError("dd: " .. blocksRead .. " blocks read, " ..
-        blocksWritten .. " blocks written, " .. bytesTotal .. " bytes\nTime: " .. tostring(endTime))
+        blocksWritten .. " blocks written, " .. bytesTotal .. " bytes")
 end
 
 os.exit(0)

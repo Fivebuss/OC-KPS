@@ -119,7 +119,8 @@ function os.execute(path, opts)
 end
 
 -- This is incredibly bad
-if filesystem.exists("usr") then
+local janklink = false
+if filesystem.exists("usr") and janklink then
     for file in filesystem.list("/usr/etc") do
         local name = file:gsub("/$", "")
         filesystem.link("/usr/etc/" .. name, "/etc/" .. name)

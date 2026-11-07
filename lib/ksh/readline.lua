@@ -284,6 +284,15 @@ function readline:read(skipPromptDraw)
 			return true
 		end
 
+		-- Ctrl L, finally it was bugging me
+		if char == 12 then
+			session.tty:clear()
+			session:write_str(prompt)
+			curRelRow, curRelCol = relPos(promptW)
+			redrawLine()
+			return true
+		end
+
 		-- Ctrl D
 		if char == 4 then
 			if #buf == 0 then
