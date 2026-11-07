@@ -272,7 +272,7 @@ if doKernel then
     local moddir  = filesystem.concat(root, "/sys/kernel/modules")
     local outfile = filesystem.concat(root, "/sys/kernel/kmodules.lua")
     io.writeln("Kmake: Started for polaris kernel v" .. polaris.version.kernel)
-    local n = buildFile("Building kernel modules:", moddir, outfile, "modules", "component.lua")
+    local n = buildFile("Building kernel modules:", moddir, outfile, "modules", "component.lua", "event_internals.lua")
     total   = total + n
 end
 

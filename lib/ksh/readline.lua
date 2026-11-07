@@ -134,7 +134,7 @@ function readline:read(skipPromptDraw)
 		if curRelRow > 1 then
 			out[#out + 1] = "\27[" .. (curRelRow - 1) .. "A"
 		end
-		out[#out + 1] = "\27[K"
+		out[#out + 1] = "\27[J"
 		out[#out + 1] = prompt
 		out[#out + 1] = line
 		if suffixW > 0 then
