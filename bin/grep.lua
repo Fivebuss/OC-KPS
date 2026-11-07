@@ -18,6 +18,8 @@ local fileError = true
 local invert = false
 local matchWhole = false
 local printNames = false
+local onlyMatching = false  -- -o
+local extendedRegex = false -- -E we will just cheat
 
 -- Table with patterns to check for
 local patternList = {}
@@ -26,7 +28,7 @@ local patternList = {}
 local patternFiles = {}
 
 local function printUsage()
-    io.writelnError('Usage: grep [-c|-l|-q][-Finsvx] [-e pattern] [-f patternFile] [pattern] [file...]')
+    io.writelnError('Usage: grep [-c|-l|-q][-EFinsvxo] [-e pattern] [-f patternFile] [pattern] [file...]')
 end
 
 -- Resolve the location of a file, without searching the path
@@ -63,7 +65,7 @@ if #args < 1 then
     os.exit(2)
 end
 
-for opt, arg in getopt(args, "EFce:f:ilnqsvx") do
+for opt, arg in getopt(args, "EFce:f:ilnqsvxo") do
     if opt == 'F' then
         plain = true
     elseif opt == 'c' then
@@ -98,8 +100,10 @@ for opt, arg in getopt(args, "EFce:f:ilnqsvx") do
         invert = true
     elseif opt == 'x' then
         matchWhole = true
+    elseif opt == 'o' then
+        onlyMatching = true
     elseif opt == 'E' then
-        -- Extended regex: not supported, using Lua patterns
+        extendedRegex = true
     elseif opt == '?' then
         printUsage()
         os.exit(2)
@@ -108,6 +112,36 @@ for opt, arg in getopt(args, "EFce:f:ilnqsvx") do
         printUsage()
         os.exit(2)
     end
+end
+
+-- Split on |
+local function splitEREPattern(pat)
+    local parts = {}
+    local current = ""
+    local inClass = false
+    local i = 1
+    while i <= #pat do
+        local c = pat:sub(i, i)
+        if c == "[" and not inClass then
+            inClass = true
+            current = current .. c
+        elseif c == "]" and inClass then
+            inClass = false
+            current = current .. c
+        elseif c == "|" and not inClass then
+            if #current > 0 then
+                table.insert(parts, current)
+            end
+            current = ""
+        else
+            current = current .. c
+        end
+        i = i + 1
+    end
+    if #current > 0 then
+        table.insert(parts, current)
+    end
+    return parts
 end
 
 -- Read the pattern files and add the patterns to the patternList
@@ -134,6 +168,18 @@ if #patternList == 0 then
     else
         table.insert(patternList, table.remove(args, 1))
     end
+end
+
+-- I like how I do extendedRegex then dont support it
+if extendedRegex then
+    local newPatternList = {}
+    for _, pat in ipairs(patternList) do
+        local parts = splitEREPattern(pat)
+        for _, p in ipairs(parts) do
+            table.insert(newPatternList, p)
+        end
+    end
+    patternList = newPatternList
 end
 
 -- Prepare an iterator for reading files
@@ -190,16 +236,14 @@ else
 end
 
 -- Main
-if #args > 1 then printNames = true end -- Print the names of the files we read
+if #args > 1 then printNames = true end
 
 local matchFile = nil
 local lineCount = 0
 
 for line, file, ln in readLines() do
     local sig = coroutine.yield()
-    if sig == "INT" then
-        os.exit(130)
-    end
+    if sig == "INT" then os.exit(130) end
     if process.isSignal(sig) then break end
 
     if not line then
@@ -207,14 +251,28 @@ for line, file, ln in readLines() do
     else
         file = file or '(standard input)'
         local match = false
+        local matches = {}
         for _, pattern in pairs(patternList) do
             local pat = pattern
             if ignoreCase then pat = caseInsensitivePattern(pattern) end
-            local i, j = line:find(pat, 1, plain)
-            if not matchWhole then
-                match = i and true or match
+            if onlyMatching then
+                -- -o support
+                local pos = 1
+                while pos <= #line do
+                    local i, j = line:find(pat, pos, plain)
+                    if not i then break end
+                    matches[#matches + 1] = line:sub(i, j)
+                    pos = j + 1
+                    if pos > #line then break end
+                end
+                match = #matches > 0
             else
-                if j == #line and i == 1 then match = true end
+                local i, j = line:find(pat, 1, plain)
+                if not matchWhole then
+                    match = i and true or match
+                else
+                    if j == #line and i == 1 then match = true end
+                end
             end
         end
         if match ~= invert then
@@ -223,15 +281,21 @@ for line, file, ln in readLines() do
                 if writeNamesOnce then
                     if matchFile ~= file then io.writeln(file) end
                 else
-                    local out = ""
-                    if printNames then
-                        out = file .. ': '
+                    if onlyMatching then
+                        for _, m in ipairs(matches) do
+                            local out = ""
+                            if printNames then out = file .. ': ' end
+                            if lineNumber then out = out .. ln .. ': ' end
+                            out = out .. m
+                            io.writeln(out)
+                        end
+                    else
+                        local out = ""
+                        if printNames then out = file .. ': ' end
+                        if lineNumber then out = out .. ln .. ': ' end
+                        out = out .. line
+                        io.writeln(out)
                     end
-                    if lineNumber then
-                        out = out .. ln .. ': '
-                    end
-                    out = out .. line
-                    io.writeln(out)
                 end
             elseif matchFile ~= file then
                 if printNames then io.write(matchFile .. ': ') end

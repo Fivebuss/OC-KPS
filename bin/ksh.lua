@@ -41,6 +41,61 @@ local function readerPassthrough(reader)
     }
 end
 
+-- Here is a string <<<
+local function makeStringReader(content)
+    local pos = 1
+    local n = #content
+    return {
+        -- This is incredibly jank but it works lmao. I hope.
+        read = function(_, fmt)
+            if pos > n then
+                return nil
+            end
+            local want
+
+            if fmt == nil or fmt == math.huge or fmt == "*a" then
+                want = n
+            elseif fmt == "*l" or fmt == "l" then
+                local nl = content:find("\n", pos, true)
+                want = nl and (nl - 1) or n
+            elseif type(fmt) == "number" then
+                want = math.min(pos + fmt - 1, n)
+            else
+                want = n
+            end
+
+            if pos <= want then
+                local chunk = content:sub(pos, want)
+                pos = want + 1
+                return chunk
+            end
+            return nil
+        end,
+        readLine = function()
+            if pos > n then
+                return nil
+            end
+            local nl = content:find("\n", pos, true)
+            local chunk, newpos
+
+            if nl then
+                chunk = content:sub(pos, nl - 1)
+                newpos = nl + 1
+            else
+                chunk = content:sub(pos)
+                newpos = n + 1
+            end
+
+            pos = newpos
+            if chunk == "" and pos > n then
+                return nil
+            end
+            return chunk
+        end,
+        close = function() end,
+    }
+end
+
 local function writerPassthrough(writer)
     return {
         write = function(_, ...) return writer:write(...) end,
@@ -145,8 +200,11 @@ local function stripComments(line)
     local stripped = {}
     local inD, inS = false, false
     local subDepth = 0
+
     for i = 1, #line do
         local c = line:sub(i, i)
+        local prev = (i > 1) and line:sub(i - 1, i - 1) or " "
+
         if c == '"' and not inS then
             inD = not inD
         elseif c == "'" and not inD then
@@ -155,7 +213,8 @@ local function stripComments(line)
             subDepth = subDepth + 1
         elseif c == ")" and not inD and not inS and subDepth > 0 then
             subDepth = subDepth - 1
-        elseif c == "#" and not inD and not inS and subDepth == 0 then
+        elseif c == "#" and not inD and not inS and subDepth == 0
+            and (prev == " " or prev == "\t" or prev == ";" or prev == "\n") then
             break
         end
         stripped[#stripped + 1] = c
@@ -207,30 +266,6 @@ local function applyOperator(name, op, arg, value)
     return "" -- :+ with unset value
 end
 
--- text match too big for this lol
-local function matchParen(s, from)
-    local depth = 0
-    local i = from
-    local n = #s
-    while i <= n do
-        local c = s:sub(i, i)
-        if c == "'" or c == '"' then
-            i = i + 1
-            while i <= n and s:sub(i, i) ~= c do
-                i = i + 1
-            end
-            if i > n then return nil end
-        elseif c == "(" then
-            depth = depth + 1
-        elseif c == ")" then
-            depth = depth - 1
-            if depth == 0 then return i end
-        end
-        i = i + 1
-    end
-    return nil
-end
-
 -- Substitution in a subshell. Yes I strip newline, bite me
 local function runCapture(body, getenv)
     local tokens, err = tokenize(stripComments(body))
@@ -245,11 +280,212 @@ local function runCapture(body, getenv)
     return (text:gsub("\n+$", "")), status
 end
 
+-- Math in ((...)) this is absurdly complex but I did all the work in MShell already
+local function evaluateArithmetic(expr, getenv)
+    local POW = function(a, b) return (tonumber(a) or 0) ^ (tonumber(b) or 0) end
+    local XOR = function(a, b) return (tonumber(a) or 0) ~ (tonumber(b) or 0) end
+
+    local TERN = function(c, x, y)
+        local truth = type(c) == "boolean" and c or ((tonumber(c) or 0) ~= 0)
+        if truth then return x end
+        return y
+    end
+
+    -- Replace vars
+    local function varValue(name)
+        local v = lookupVar(name, getenv)
+        if v == nil or v == "" then return "0" end
+        return tostring(v)
+    end
+
+    -- Deal with ${var:-word}, ${var:=word}, ${var:+word}, ${var:?word}
+    expr = expr:gsub("%$%{([%a_][%w_]*):([%-=+?])([^}]*)%}", function(name, op, arg)
+        local val = lookupVar(name, getenv)
+        if val ~= nil and val ~= "" then
+            if op == "+" then return arg end
+            return val
+        end
+
+        if op == "-" then return arg end
+        if op == "=" then
+            st().locals[name] = arg
+            return arg
+        end
+
+        if op == "?" then
+            writeRed(process.error(), "ksh: " .. name .. ": " .. (arg ~= "" and arg or "parameter not set"), "\n")
+            return "0"
+        end
+        return "0"
+    end)
+
+    -- And $var and ${var}
+    expr = expr:gsub("%$([%a_][%w_]*)", function(name)
+        return varValue(name)
+    end)
+    expr = expr:gsub("%$%{([%a_][%w_]*)%}", function(name)
+        return varValue(name)
+    end)
+    expr = expr:gsub("%$%?", tostring(st().lastExitCode))
+    expr = expr:gsub("%$%$", tostring(shellPid or 0))
+    expr = expr:gsub("%$([%d]+)", function(num)
+        return varValue(num)
+    end)
+    expr = expr:gsub("%$([#@*0])", function(sym)
+        return varValue(sym)
+    end)
+
+    local aname, aop, arhs = expr:match("^%s*([%a_][%w_]*)%s*([%+%-*/%%]?)=%s*(.+)$") -- Thank goodness for lua pattern maker!
+    if aname and arhs:sub(1, 1) ~= "=" then
+        local rhs = math.floor(tonumber(evaluateArithmetic(arhs, getenv)) or 0)
+        local cur = math.floor(tonumber(lookupVar(aname, getenv)) or 0)
+        local newv = rhs
+        if aop == "+" then
+            newv = cur + rhs
+        elseif aop == "-" then
+            newv = cur - rhs
+        elseif aop == "*" then
+            newv = cur * rhs
+        elseif aop == "/" then
+            if rhs == 0 then newv = 0 else newv = math.floor(cur / rhs) end
+        elseif aop == "%" then
+            if rhs == 0 then newv = 0 else newv = cur % rhs end
+        end
+        st().locals[aname] = tostring(newv)
+        return newv
+    end
+
+    local pname = expr:match("^%s*([%a_][%w_]*)%+%+%s*$")
+    local dname = expr:match("^%s*([%a_][%w_]*)%-%-%s*$")
+    if pname or dname then
+        local nm = pname or dname
+        local cur = math.floor(tonumber(lookupVar(nm, getenv)) or 0)
+        st().locals[nm] = tostring(cur + (pname and 1 or -1))
+        return cur
+    end
+
+    pname = expr:match("^%s*%+%+([%a_][%w_]*)%s*$")
+    dname = expr:match("^%s*%-%-([%a_][%w_]*)%s*$")
+    if pname or dname then
+        local nm = pname or dname
+        local cur = math.floor(tonumber(lookupVar(nm, getenv)) or 0) + (pname and 1 or -1)
+        st().locals[nm] = tostring(cur)
+        return cur
+    end
+
+    expr = expr:gsub("[%a_][%w_]*", function(id)
+        if id == "nil" or id == "true" or id == "false" then return id end
+        local v = lookupVar(id, getenv)
+        if v == nil or v == "" then return "0" end
+        return tostring(v)
+    end)
+
+    expr = expr:gsub("!=", "~=")
+    expr = expr:gsub("([%w_.]+)%*%*([%w_.]+)", "POW(%1,%2)")
+    expr = expr:gsub("([%w_.]+)%^([%w_.]+)", "XOR(%1,%2)")
+
+    -- Who even uses this? I guess me
+    local function translateTernary(e)
+        local depth, qpos = 0, nil
+
+        for i = 1, #e do
+            local c = e:sub(i, i)
+            if c == "(" then
+                depth = depth + 1
+            elseif c == ")" then
+                depth = depth - 1
+            elseif c == "?" and depth == 0 then
+                qpos = i
+                break
+            end
+        end
+        if not qpos then return e end
+        local cond = translateTernary(e:sub(1, qpos - 1))
+        depth = 0
+        local ternDepth, colon = 0, nil
+
+        for i = qpos + 1, #e do
+            local c = e:sub(i, i)
+            if c == "(" then
+                depth = depth + 1
+            elseif c == ")" then
+                depth = depth - 1
+            elseif c == "?" and depth == 0 then
+                ternDepth = ternDepth + 1
+            elseif c == ":" then
+                if depth == 0 then
+                    if ternDepth == 0 then
+                        colon = i
+                        break
+                    end
+                    ternDepth = ternDepth - 1
+                end
+            end
+        end
+        if not colon then return e end
+        return "TERN(" .. cond .. "," ..
+            translateTernary(e:sub(qpos + 1, colon - 1)) .. "," ..
+            translateTernary(e:sub(colon + 1)) .. ")"
+    end
+    expr = translateTernary(expr)
+
+    -- Kindly dont crash my shell though. MShell sure got that wrong...
+    local fn, err = load("return " .. expr, "=arithmetic", "t",
+        { math = math, POW = POW, XOR = XOR, TERN = TERN })
+    if not fn then
+        writeRed(process.error(), "ksh: arithmetic error: " .. tostring(err), "\n")
+        return 0
+    end
+
+    local ok, result = pcall(fn)
+    if not ok then
+        writeRed(process.error(), "ksh: arithmetic error: " .. tostring(result), "\n")
+        return 0
+    end
+    if result == true then return 1 end
+    if result == false then return 0 end
+    return math.floor(tonumber(result) or 0)
+end
+
 -- Gross.
 local function expandCommandSubstitutions(str, getenv)
     local out = {}
     local lastStatus
     local i, n = 1, #str
+
+    local function findMatchingParen(s, start)
+        local depth = 0
+        local frames = {}
+        local prevDollar = false
+        local j = start
+        while j <= #s do
+            local c = s:sub(j, j)
+            local top = frames[#frames]
+            local qhere = (top and top.lvl == depth) and top.q or nil
+            if c == "(" then
+                if not qhere or (prevDollar and qhere ~= "'") then
+                    depth = depth + 1
+                end
+                prevDollar = false
+            elseif c == ")" then
+                if not qhere and depth > 0 then
+                    depth = depth - 1
+                    if depth == 0 then return j end
+                end
+                prevDollar = false
+            else
+                if qhere and qhere == c then
+                    table.remove(frames)
+                elseif c == "'" or c == '"' or c == "`" then
+                    table.insert(frames, { q = c, lvl = depth })
+                end
+                prevDollar = (c == "$")
+            end
+            j = j + 1
+        end
+        return nil
+    end
+
     while i <= n do
         local nxt = str:find("['`$]", i) or n + 1
         if nxt > n then
@@ -261,7 +497,6 @@ local function expandCommandSubstitutions(str, getenv)
         if c == "'" then
             local close = str:find("'", nxt + 1, true)
             if not close then
-                -- How did we get here
                 out[#out + 1] = str:sub(nxt)
                 break
             end
@@ -278,8 +513,24 @@ local function expandCommandSubstitutions(str, getenv)
             lastStatus = status
             i = close + 1
         else -- c == "$"
-            if str:sub(nxt + 1, nxt + 1) == "(" then
-                local close = matchParen(str, nxt + 1)
+            if str:sub(nxt + 1, nxt + 2) == "((" then
+                -- $((...))
+                local close = findMatchingParen(str, nxt + 2)
+                if not close then
+                    writeRed(process.error(), "ksh: missing )) to match ((", "\n")
+                    return table.concat(out), lastStatus
+                end
+
+                local expr = str:sub(nxt + 3, close - 1)
+                local result = evaluateArithmetic(expr, getenv)
+                out[#out + 1] = tostring(result)
+                i = close + 1
+                if i <= n and str:sub(i, i) == ")" then
+                    i = i + 1
+                end
+            elseif str:sub(nxt + 1, nxt + 1) == "(" then
+                -- Command substi $(...)
+                local close = findMatchingParen(str, nxt + 1)
                 if not close then
                     writeRed(process.error(), "ksh: missing ) to match (", "\n")
                     return table.concat(out), lastStatus
@@ -307,14 +558,121 @@ local function expandVars(str, getenv)
         local body = tok:sub(3, -2)
         local name, op, arg = body:match("^([%a_][%w_]*):([%-=+?])(.*)$")
         if name then
+            arg = expandVars(arg, getenv)
             local result, err = applyOperator(name, op, arg, lookupVar(name, getenv))
             if err then failMsg = failMsg or err end
             return result or ""
         end
+
+        local iname = body:match("^!(.+)$")
+        if iname then
+            local ref = lookupVar(iname, getenv)
+            return lookupVar(ref or "", getenv) or ""
+        end
+
+        -- Why must escaped env variables exist? Like wtf is this pattern I made 5 years ago dude
+        local sname, soff, slen = body:match("^([%a_][%w_]*):(%-?%d+):?(%-?%d*)$")
+        if sname then
+            local val = tostring(lookupVar(sname, getenv) or "")
+            local start = tonumber(soff)
+            if start < 0 then
+                start = math.max(#val + start, 0)
+            end
+            if slen ~= "" then
+                local len = tonumber(slen)
+                if len < 0 then
+                    return val:sub(start + 1, math.max(#val + len, start))
+                end
+                return val:sub(start + 1, start + len)
+            end
+            return val:sub(start + 1)
+        end
+
+        local rname, sep, rest = body:match("^([%a_][%w_]*)(/+)(.*)$")
+        if rname then
+            local val = tostring(lookupVar(rname, getenv) or "")
+            local pat, rep = rest:match("^([^/]*)/(.*)$")
+            pat = pat or ""
+            rep = rep or ""
+            local luaPat = ""
+
+            for idx = 1, #pat do
+                local c = pat:sub(idx, idx)
+                if c == "*" then
+                    luaPat = luaPat .. ".*"
+                elseif c == "?" then
+                    luaPat = luaPat .. "."
+                elseif c:match("%W") then
+                    luaPat = luaPat .. "%" .. c
+                else
+                    luaPat = luaPat .. c
+                end
+            end
+            if sep == "//" then
+                return (val:gsub(luaPat, function() return rep end))
+            end
+            local s, e = val:find(luaPat)
+            if s then
+                return val:sub(1, s - 1) .. rep .. val:sub(e + 1)
+            end
+            return val
+        end
+
+        local prefixName, prefixOp, prefPat = body:match("^([%a_][%w_]*)(##?)(.+)$")
+        if prefixName then
+            local val = tostring(lookupVar(prefixName, getenv) or "")
+            local luaPat = ""
+            for idx = 1, #prefPat do
+                local c = prefPat:sub(idx, idx)
+                if c == "*" then
+                    luaPat = luaPat .. (prefixOp == "##" and ".*" or ".-")
+                elseif c == "?" then
+                    luaPat = luaPat .. "."
+                elseif c:match("%W") then
+                    luaPat = luaPat .. "%" .. c
+                else
+                    luaPat = luaPat .. c
+                end
+            end
+            local s, e = val:find("^" .. luaPat)
+            if s then
+                return val:sub(e + 1)
+            end
+            return val
+        end
+
+        local suffixName, suffixOp, sufPat = body:match("^([%a_][%w_]*)(%%?%%)(.+)$")
+        if suffixName then
+            local val = tostring(lookupVar(suffixName, getenv) or "")
+            local luaPat = ""
+            for idx = 1, #sufPat do
+                local c = sufPat:sub(idx, idx)
+                if c == "*" then
+                    luaPat = luaPat .. ".*"
+                elseif c == "?" then
+                    luaPat = luaPat .. "."
+                elseif c:match("%W") then
+                    luaPat = luaPat .. "%" .. c
+                else
+                    luaPat = luaPat .. c
+                end
+            end
+            local j = (suffixOp == "%%") and 1 or #val
+            local step = (suffixOp == "%%") and 1 or -1
+            while j >= 1 and j <= #val do
+                if val:sub(j):match("^" .. luaPat .. "$") then
+                    return val:sub(1, j - 1)
+                end
+                j = j + step
+            end
+            return val
+        end
+
         if body == "?" then return tostring(st().lastExitCode) end
         if body == "$" then return tostring(shellPid or 0) end
         return lookupVar(body, getenv) or ""
     end)
+
     out = out:gsub("%$%?", tostring(st().lastExitCode))
     out = out:gsub("%$%$", tostring(shellPid or 0))
     out = out:gsub("%$([%d]+)", function(num)
@@ -330,23 +688,111 @@ local function expandVars(str, getenv)
 end
 
 -- Fine il seperate them
-local function expandToken(w, getenv)
-    local isSingle = (#w >= 2 and w:sub(1, 1) == "'" and w:sub(-1) == "'")
-    local isDouble = (#w >= 2 and w:sub(1, 1) == '"' and w:sub(-1) == '"')
+local function protectEscapedDollar(str)
+    return str:gsub("\\%$", "\000ESCAPED_DOLLAR\000")
+end
 
-    local inner = (isSingle or isDouble) and w:sub(2, -2) or w
-    if isSingle then
-        return inner, nil
+local function restoreEscapedDollar(str)
+    return str:gsub("%zESCAPED_DOLLAR%z", "$")
+end
+
+-- Fine il do it again...
+local function expandToken(w, getenv)
+    local quotes = {
+        { "'", "'" },
+        { '"', '"' }
+    }
+    local segs = {}
+    local cur = { kind = "raw", txt = "" }
+    local frames = {}
+    local depth = 0
+    local prevDollar = false
+
+    local function flush()
+        if #cur.txt > 0 or cur.kind ~= "raw" then
+            segs[#segs + 1] = cur
+        end
+        cur = { kind = "raw", txt = "" }
     end
 
-    local expanded, failMsg, subStatus = expandVars(inner, getenv)
-    if not isDouble then
-        if expanded == "~" or expanded:sub(1, 2) == "~/" then
-            local home = getenv("HOME") or "/"
-            expanded = home .. expanded:sub(2)
+    -- please dont crash please dont crash
+    for i = 1, #w do
+        local char = w:sub(i, i)
+        local top = frames[#frames]
+        local qhere = (top and top.lvl == depth) and top.q or nil
+
+        if char == "(" then
+            if not qhere or (prevDollar and qhere ~= "'") then
+                depth = depth + 1
+            end
+            cur.txt = cur.txt .. char
+            prevDollar = false
+        elseif char == ")" then
+            if not qhere and depth > 0 then
+                depth = depth - 1
+            end
+            cur.txt = cur.txt .. char
+            prevDollar = false
+        elseif qhere and qhere == char then
+            table.remove(frames)
+            if #frames > 0 then
+                cur.txt = cur.txt .. char
+            else
+                flush()
+            end
+            prevDollar = false
+        elseif qhere then
+            cur.txt = cur.txt .. char
+            prevDollar = (char == "$")
+        else
+            local rec
+            for _, Q in ipairs(quotes) do
+                if Q[1] == char then rec = Q end
+            end
+
+            if rec then
+                if top then
+                    cur.txt = cur.txt .. char
+                else
+                    flush()
+                    cur = { kind = rec[1], txt = "" }
+                end
+                table.insert(frames, { q = rec[1], lvl = depth })
+            else
+                cur.txt = cur.txt .. char
+            end
+
+            prevDollar = false
         end
     end
-    return expanded, failMsg, subStatus
+    flush()
+
+    local result = ""
+    local failMsg, subStatus
+    for _, seg in ipairs(segs) do
+        if seg.kind == "'" then
+            result = result .. seg.txt
+        elseif seg.kind == '"' then
+            local inner = protectEscapedDollar(seg.txt)
+            inner = inner:gsub("\\([`\"\\])", "%1")
+            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv)
+            failMsg = failMsg or failMsg2
+            subStatus = subStatus or subStatus2
+            result = result .. restoreEscapedDollar(expanded)
+        else
+            local inner = protectEscapedDollar(seg.txt)
+            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv)
+            failMsg = failMsg or failMsg2
+            subStatus = subStatus or subStatus2
+            expanded = restoreEscapedDollar(expanded)
+            if expanded == "~" or expanded:sub(1, 2) == "~/" then
+                local home = getenv("HOME") or "/"
+                expanded = home .. expanded:sub(2)
+            end
+            result = result .. expanded
+        end
+    end
+    return result, failMsg, subStatus
 end
 
 -- Text library is amazing
@@ -433,6 +879,128 @@ local function expandWildcard(str)
 end
 
 -- deals with redirection
+local function expandBraceToken(str)
+    local function splitTopCommas(body)
+        local depth = 0
+        local parts = { "" }
+        local i = 1
+
+        while i <= #body do
+            local c = body:sub(i, i)
+            if c == "{" then
+                depth = depth + 1
+                parts[#parts] = parts[#parts] .. c
+            elseif c == "}" then
+                if depth > 0 then depth = depth - 1 end
+                parts[#parts] = parts[#parts] .. c
+            elseif c == "," and depth == 0 then
+                parts[#parts + 1] = ""
+            else
+                parts[#parts] = parts[#parts] .. c
+            end
+            i = i + 1
+        end
+        if #parts > 1 then
+            return parts
+        end
+        return nil
+    end
+
+    -- I think I got this right. I refuse to use my own bit32 library haha
+    local function rangeItems(ra, rb)
+        local na, nb = tonumber(ra), tonumber(rb)
+        if na and nb then
+            local width = 0
+            if ra:sub(1, 1) == "0" or rb:sub(1, 1) == "0" then
+                width = math.max(#ra, #rb)
+            end
+            local fmt = ("%0" .. width .. "d")
+            local items = {}
+            local step = (na <= nb) and 1 or -1
+            local v = na
+
+            while true do
+                items[#items + 1] = string.format(fmt, v)
+                if v == nb then break end
+                v = v + step
+            end
+            return items
+        end
+        if #ra == 1 and #rb == 1 then
+            local ca, cb = ra:byte(), rb:byte()
+            local cOk = (ca >= 65 and ca <= 90) or (ca >= 97 and ca <= 122)
+            local cCb = (cb >= 65 and cb <= 90) or (cb >= 97 and cb <= 122)
+            if cOk and cCb then
+                local items = {}
+                local step = (ca <= cb) and 1 or -1
+                local v = ca
+                while true do
+                    items[#items + 1] = string.char(v)
+                    if v == cb then break end
+                    v = v + step
+                end
+                return items
+            end
+        end
+        return nil
+    end
+
+    -- Easy
+    local function expandOne(s)
+        local i = 1
+        while i <= #s do
+            if s:sub(i, i) == "{" then
+                local depth = 1
+                local j = i + 1
+                local found = nil
+
+                while j <= #s and depth > 0 do
+                    local cj = s:sub(j, j)
+                    if cj == "{" then
+                        depth = depth + 1
+                    elseif cj == "}" then
+                        depth = depth - 1
+                        if depth == 0 then found = j end
+                    end
+                    j = j + 1
+                end
+
+                if found then
+                    local body = s:sub(i + 1, found - 1)
+                    local expandedBodies = nil
+                    local parts = splitTopCommas(body)
+
+                    if parts then
+                        expandedBodies = parts
+                    else
+                        local ra, rb = body:match("^([^,]+)%.%.([^,]+)$")
+                        if ra and rb then
+                            expandedBodies = rangeItems(ra, rb)
+                        end
+                    end
+
+                    if expandedBodies then
+                        local out = {}
+                        local prefix = s:sub(1, i - 1)
+                        local suffix = s:sub(found + 1)
+                        for _, eb in ipairs(expandedBodies) do
+                            local cand = prefix .. eb .. suffix
+                            for _, e2 in ipairs(expandOne(cand)) do
+                                out[#out + 1] = e2
+                            end
+                        end
+                        return out
+                    end
+                end
+            end
+            i = i + 1 -- this looks aweful. end end end end end
+        end
+        return { s }
+    end
+
+    return expandOne(str)
+end
+
 local function parseSegment(words, getenv)
     if #words == 0 then
         return nil, "empty command"
@@ -477,21 +1045,23 @@ local function parseSegment(words, getenv)
         local expanded, failMsg, subStatus = expandToken(w, getenv)
         expandFail = expandFail or failMsg
         if isQuoted then return { expanded } end
-        if subStatus ~= nil then
-            -- unquoted?
-            local fields = {}
-            for field in expanded:gmatch("%S+") do
-                fields[#fields + 1] = field
+        local braceParts = expandBraceToken(expanded)
+        local out = {}
+
+        for _, part in ipairs(braceParts) do
+            if subStatus ~= nil then
+                for field in part:gmatch("%S+") do
+                    for _, m in ipairs(expandWildcard(field)) do
+                        out[#out + 1] = m
+                    end
+                end
+            else
+                for _, m in ipairs(expandWildcard(part)) do
+                    out[#out + 1] = m
+                end
             end
-            if #fields == 0 then return {} end
-            local out = {}
-            for _, f in ipairs(fields) do
-                local matches = expandWildcard(f)
-                for _, m in ipairs(matches) do out[#out + 1] = m end
-            end
-            return out
         end
-        return expandWildcard(expanded)
+        return out
     end
 
     -- (thing) and { list; }
@@ -513,6 +1083,16 @@ local function parseSegment(words, getenv)
         elseif w == "<" then
             if type(words[i + 1]) ~= "string" then return nil, "missing filename after <" end
             redirects.stdinFile = dealWithToken(words[i + 1])[1]
+            i = i + 2
+        elseif w == "<<<" then -- I forgot completely about this guy
+            local nxt = words[i + 1]
+            if type(nxt) ~= "string" or nxt == "<" or nxt == ">" or nxt == ">>"
+                or nxt == ";"
+                or nxt == "|" or nxt == "&&" or nxt == "||" then
+                return nil, "syntax error near '<<<'"
+            end
+            local fields = dealWithToken(nxt)
+            redirects.stdinString = table.concat(fields, " ") .. "\n"
             i = i + 2
         elseif w == ">" then
             if type(words[i + 1]) ~= "string" then return nil, "missing filename after >" end
@@ -704,6 +1284,9 @@ local function makeStreams(inPipe, outPipe, redirects)
         if not stream then return fail(ioErr(reason, redirects.stdinFile)) end
         stdin = stream
         owned[#owned + 1] = stream
+    elseif redirects.stdinString then
+        stdin = makeStringReader(redirects.stdinString)
+        owned[#owned + 1] = stdin
     else
         stdin = inPipe or ownStdin()
     end
@@ -1987,51 +2570,65 @@ local function runCommandGroup(words, getenv)
 end
 
 -- This is incredibly lazy but is for $( subshell ) syntax
+-- Turns out I got it wrong in mshell so il redo it here
 local function extractSubshells(tokens)
+    local function parseGroup(tokens, i, n, isSubshell, isArithmetic)
+        local inner = {}
+        local depth = 1
+        local j = i
+
+        while j <= n do
+            local t = tokens[j]
+            if type(t) == "string" and not tokenIsQuoted(t) then
+                if t == "(" or t == "$(" or t == "$((" then
+                    depth = depth + 1
+                    inner[#inner + 1] = t
+                elseif t == ")" then
+                    depth = depth - 1
+                    if depth == 0 then break end
+                    inner[#inner + 1] = t
+                else
+                    inner[#inner + 1] = t
+                end
+            else
+                inner[#inner + 1] = t
+            end
+            j = j + 1
+        end
+        if depth ~= 0 then
+            return nil, "missing )", j
+        end
+        if isSubshell then
+            if #inner == 0 then
+                return nil, "syntax error: empty ( list )", j
+            end
+            return { subshell = inner }, nil, j + 1
+        elseif isArithmetic then
+            -- $((...))
+            local processed, err = extractSubshells(inner)
+            if not processed then return nil, err, j end
+            return "$((" .. table.concat(processed, " ") .. "))", nil, j + 1
+        else
+            -- $(...)
+            local processed, err = extractSubshells(inner)
+            if not processed then return nil, err, j end
+            return "$(" .. table.concat(processed, " ") .. ")", nil, j + 1
+        end
+    end
+
     local out = {}
     local i = 1
     local n = #tokens
     while i <= n do
         local tok = tokens[i]
         if type(tok) == "string" and not tokenIsQuoted(tok) then
-            if tok == "(" or tok == "$(" then
+            if tok == "(" or tok == "$(" or tok == "$((" then
                 local isGroup = (tok == "(")
-                local depth = 1
-                local inner = {}
-                local j = i + 1
-                while j <= n do
-                    local t = tokens[j]
-                    if type(t) == "string" and not tokenIsQuoted(t) then
-                        if t == "(" or t == "$(" then
-                            depth = depth + 1
-                            inner[#inner + 1] = t
-                            j = j + 1
-                        elseif t == ")" then
-                            depth = depth - 1
-                            if depth == 0 then break end
-                            inner[#inner + 1] = t
-                            j = j + 1
-                        else
-                            inner[#inner + 1] = t
-                            j = j + 1
-                        end
-                    else
-                        inner[#inner + 1] = t
-                        j = j + 1
-                    end
-                end
-                if depth ~= 0 then
-                    return nil, "missing )"
-                end
-                if isGroup then
-                    if #inner == 0 then
-                        return nil, "syntax error: empty ( list )"
-                    end
-                    out[#out + 1] = { subshell = inner }
-                else
-                    out[#out + 1] = "$(" .. table.concat(inner, " ") .. ")"
-                end
-                i = j + 1
+                local isArithmetic = (tok == "$((")
+                local result, err, nextI = parseGroup(tokens, i + 1, n, isGroup, isArithmetic)
+                if not result then return nil, err end
+                out[#out + 1] = result
+                i = nextI
             elseif tok == ")" then
                 return nil, "syntax error near ')'"
             else
@@ -2048,20 +2645,33 @@ end
 
 -- Chains hopefully dont barrel through anymore
 local function runAndList(tokens, getenv)
-    local groups = splitTokensOn(tokens, "&&")
-    for _, groupTokens in ipairs(groups) do
-        if #groupTokens == 0 then
-            writeRed(process.error(), "ksh: syntax error near '&&'", "\n")
+    -- Now we have ||
+    local orGroups = splitTokensOn(tokens, "||")
+    for oi, orGroup in ipairs(orGroups) do
+        if #orGroup == 0 then
+            writeRed(process.error(), "ksh: syntax error near '||'", "\n")
             st().lastExitCode = 2
             return
         end
 
-        runCommandGroup(groupTokens, getenv)
-
-        if st().lastExitCode ~= 0 then
-            -- && skip
+        local andGroups = splitTokensOn(orGroup, "&&")
+        local andResult = true
+        for _, andGroup in ipairs(andGroups) do
+            if #andGroup == 0 then
+                writeRed(process.error(), "ksh: syntax error near '&&'", "\n")
+                st().lastExitCode = 2
+                return
+            end
+            runCommandGroup(andGroup, getenv)
+            if st().lastExitCode ~= 0 then
+                andResult = false
+                break
+            end
+        end
+        if andResult then
             return
         end
+        -- keep going
     end
 end
 

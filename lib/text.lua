@@ -21,6 +21,7 @@ text.syntax = {
     "%d+>",   -- N>
     "%d+<",   -- N<
 
+    "<<<",    -- <<<
     ">>",     -- >>
     ">",      -- >
     "<",      -- <
@@ -30,6 +31,7 @@ text.syntax = {
     "||",     -- ||
     "|",      -- |
 
+    "%$%(%(", -- $(( math
     "%$%(",   -- $(  substitution
     "%(",     -- (   subshell
     "%)"      -- )   end subshell
@@ -141,49 +143,92 @@ function text.internal.words(input, options)
     local tokens = {}
     local token = {}
 
+    -- Oh look subshells continue to ruin my day
+    local frames = {}
+    local depth = 0
+    local prevDollar = false
+
     local escaped = false
     local start = -1
 
     for i = 1, unicode.len(input) do
         local char = unicode.sub(input, i, i)
 
+        local top = frames[#frames]
+        local topq = top and top.q or nil
+        local qhere = (top and top.lvl == depth) and topq or nil
+
         if escaped then
             escaped = false
+            prevDollar = false
 
             -- Escape handling
-            if show_escapes or
-                (qr and not qr[3] and qr[2] ~= char) then
-                append(token, "\\", qr)
+            if show_escapes or (topq and not topq[3] and topq[2] ~= char) or char == "$" then
+                append(token, "\\", topq)
             end
 
-            append(token, char, qr)
-        elseif char == "\\" and (not qr or not qr[3]) then
+            append(token, char, topq)
+        elseif char == "\\" and (not topq or not topq[3]) then
             escaped = true
-        elseif qr and qr[2] == char then
-            -- End of quoted string
-            if #token == 0 or #token[#token] == 0 then
-                append(token, "", qr)
+            prevDollar = false
+        elseif char == "(" then
+            -- "$("
+            if qhere and not (prevDollar and not qhere[3]) then
+                append(token, char, topq)
+            else
+                depth = depth + 1
+                append(token, char, topq)
             end
-
-            qr = nil
-        elseif not qr and tx.first(quotes, function(Q)
-                qr = Q[1] == char and Q or nil
-                return qr
-            end) then
-            start = i
-        elseif not qr and string.find(char, "%s") then
+            prevDollar = false
+        elseif char == ")" then
+            if qhere then
+                append(token, char, topq)
+            else
+                if depth > 0 then
+                    depth = depth - 1
+                end
+                append(token, char, topq)
+            end
+            prevDollar = false
+        elseif qhere and topq[2] == char then
+            table.remove(frames)
+            if #frames > 0 then
+                append(token, char, frames[#frames].q)
+            end
+            prevDollar = false
+        elseif qhere then
+            append(token, char, topq)
+            prevDollar = (char == "$")
+        elseif #frames == 0 and string.find(char, "%s") then
             if #token > 0 then
                 table.insert(tokens, token)
             end
 
             token = {}
+            prevDollar = false
         else
-            append(token, char, qr)
+            local rec
+            tx.first(quotes, function(Q)
+                rec = Q[1] == char and Q or nil
+                return rec
+            end)
+            if rec then
+                table.insert(frames, { q = rec, lvl = depth, pos = i })
+                if #frames > 1 then
+                    append(token, char, frames[#frames - 1].q)
+                else
+                    -- qr's problem
+                end
+                prevDollar = false
+            else
+                append(token, char, topq)
+                prevDollar = (char == "$")
+            end
         end
     end
 
-    if qr then
-        return nil, "unclosed quote at index " .. start
+    if #frames > 0 then
+        return nil, "unclosed quote at index " .. frames[1].pos
     end
 
     if #token > 0 then

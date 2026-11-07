@@ -21,11 +21,9 @@
 * KPS Shell: A pretty "okay" shell, surpassing openOS while being also worse
 * ksh features:
 * Syntax
-  * Group formatting
-  * Environment variable expansion
-  * subshells
-  * All stream redirection types
-  * Wildcard (*)
+  * Most of posix and bash extensions like brace expansion
+  * Missing some though. I have too many to list and lack too many to list either
+  * tldr; better than openOS by 50 miles, (We dont talk about 20k memory cost for this...)
 * General
   * Exit codes
   * An actual shell pipeline that isn't sequential
@@ -58,7 +56,7 @@
   * a tar archiver and unarchiver. It's pretty neat, thanks mpmxyz
   * Some system-specific tools
   * Other misc things that aren't worth mentioning
-* Alot of ram use. Seriously, alot. ~430k idle for one GPU lmao and boots needing ~480k
+* Alot of ram use. Seriously, alot. ~460k idle for one GPU lmao and boots needing ~480k
 
 #### Main libraries
 * event: openOS style but with changes, specifically they arrive now upon a scheduler tick
