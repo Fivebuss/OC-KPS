@@ -117,7 +117,6 @@ function text.internal.words(input, options)
     local quotes = options.quotes
     local show_escapes = options.show_escapes
 
-    local qr = nil
 
     quotes = quotes or {
         { "'", "'", true },
@@ -125,13 +124,15 @@ function text.internal.words(input, options)
         { '`', '`' }
     }
 
-    local function append(dst, txt, _qr)
+    local function append(dst, txt, stk, fref)
         local size = #dst
 
-        if size == 0 or dst[size].qr ~= _qr then
+        if size == 0 or dst[size].fref ~= fref then
             dst[size + 1] = {
                 txt = txt,
-                qr = _qr
+                qr = fref and fref.q or nil,
+                stk = stk,
+                fref = fref
             }
         else
             dst[size].txt = dst[size].txt .. txt
@@ -147,9 +148,19 @@ function text.internal.words(input, options)
     local frames = {}
     local depth = 0
     local prevDollar = false
+    local dbrace = 0
 
     local escaped = false
-    local start = -1
+
+    -- You know what? Fine. Il do it this way.
+    local function currentStack()
+        if #frames == 0 then return nil end
+        local stk = {}
+        for k = 1, #frames do
+            stk[k] = frames[k]
+        end
+        return stk
+    end
 
     for i = 1, unicode.len(input) do
         local char = unicode.sub(input, i, i)
@@ -158,46 +169,57 @@ function text.internal.words(input, options)
         local topq = top and top.q or nil
         local qhere = (top and top.lvl == depth) and topq or nil
 
+        if dbrace > 0 and char == "}" then
+            dbrace = dbrace - 1
+        end
+        if prevDollar and char == "{" then
+            dbrace = dbrace + 1
+        end
+
         if escaped then
             escaped = false
             prevDollar = false
 
             -- Escape handling
-            if show_escapes or (topq and not topq[3] and topq[2] ~= char) or char == "$" then
-                append(token, "\\", topq)
+            -- again. It was broken horrificly
+            if show_escapes or dbrace > 0 or (topq and not topq[3]) or char == "$"
+                or char == "{" or char == "}" or char == "," then
+                append(token, "\\", top and currentStack(), top)
             end
 
-            append(token, char, topq)
+            append(token, char, top and currentStack(), top)
         elseif char == "\\" and (not topq or not topq[3]) then
             escaped = true
             prevDollar = false
         elseif char == "(" then
             -- "$("
             if qhere and not (prevDollar and not qhere[3]) then
-                append(token, char, topq)
+                append(token, char, top and currentStack(), top)
             else
                 depth = depth + 1
-                append(token, char, topq)
+                append(token, char, top and currentStack(), top)
             end
             prevDollar = false
         elseif char == ")" then
             if qhere then
-                append(token, char, topq)
+                append(token, char, top and currentStack(), top)
             else
                 if depth > 0 then
                     depth = depth - 1
                 end
-                append(token, char, topq)
+                append(token, char, top and currentStack(), top)
             end
             prevDollar = false
         elseif qhere and topq[2] == char then
-            table.remove(frames)
-            if #frames > 0 then
-                append(token, char, frames[#frames].q)
+            if not top.nparts or top.nparts == 0 then
+                append(token, "", top and currentStack(), top)
             end
+            table.remove(frames)
             prevDollar = false
         elseif qhere then
-            append(token, char, topq)
+            if not top.nparts then top.nparts = 0 end
+            top.nparts = top.nparts + 1
+            append(token, char, top and currentStack(), top)
             prevDollar = (char == "$")
         elseif #frames == 0 and string.find(char, "%s") then
             if #token > 0 then
@@ -214,14 +236,13 @@ function text.internal.words(input, options)
             end)
             if rec then
                 table.insert(frames, { q = rec, lvl = depth, pos = i })
-                if #frames > 1 then
-                    append(token, char, frames[#frames - 1].q)
-                else
-                    -- qr's problem
-                end
                 prevDollar = false
             else
-                append(token, char, topq)
+                if top then
+                    if not top.nparts then top.nparts = 0 end
+                    top.nparts = top.nparts + 1
+                end
+                append(token, char, top and currentStack(), top)
                 prevDollar = (char == "$")
             end
         end
@@ -414,18 +435,50 @@ function text.internal.normalize(words, omitQuotes)
 
     local norms = {}
 
+    -- I DESPISE QUOTES. THIS TOOK AN HOUR AND A HALF TO FIX
+    -- but now \n works in things. Worth it (it wasn't)
     for _, word in ipairs(words) do
         local norm = {}
+        local stack = {}
 
-        for _, part in ipairs(word) do
-            ---@diagnostic disable-next-line: cast-local-type
-            norm = tx.concat(
-                norm,
-                not omitQuotes and part.qr
-                and { part.qr[1], part.txt, part.qr[2] }
-                or { part.txt }
-            )
+        local function emit(v)
+            norm[#norm + 1] = v
         end
+
+        local function closeThrough(to)
+            while #stack > to do
+                if not omitQuotes then
+                    emit(stack[#stack].q[2])
+                end
+                table.remove(stack)
+            end
+        end
+
+        local function openThrough(st)
+            for k = #stack + 1, #st do
+                local f = st[k]
+                if not omitQuotes then
+                    emit(f.q[1])
+                end
+                stack[#stack + 1] = f
+            end
+        end
+
+        -- Cursed
+        for _, part in ipairs(word) do
+            local st = part.stk or {}
+
+            local prefix = 0
+            while prefix < #stack and prefix < #st and st[prefix + 1] == stack[prefix + 1] do
+                prefix = prefix + 1
+            end
+            closeThrough(prefix)
+            openThrough(st)
+
+            emit(part.txt)
+        end
+
+        closeThrough(0)
 
         norms[#norms + 1] = table.concat(norm)
     end

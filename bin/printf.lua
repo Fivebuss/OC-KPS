@@ -319,14 +319,13 @@ repeat
 
                 local rawVal, err = getArg(valPos)
                 if err then
-                    io.writelnError("printf: " .. err)
-                    os.exit(1)
+                    rawVal = nil
                 end
 
                 local formattedStr = ""
 
                 if typeChar == "s" then
-                    local str = tostring(rawVal == nil and "nil" or rawVal)
+                    local str = tostring(rawVal == nil and "" or rawVal)
                     if precision then
                         str = uSub(str, 1, precision)
                     end
@@ -357,7 +356,12 @@ repeat
                         formattedStr = expanded or ""
                     end
                 elseif typeChar:match("^[diuoxX]$") then
-                    local num = tonumber(rawVal)
+                    local num
+                    if rawVal == nil then
+                        num = 0
+                    else
+                        num = tonumber(rawVal)
+                    end
                     if not num or num % 1 ~= 0 then
                         io.writelnError("printf: expected integer, got '" .. tostring(rawVal) .. "'")
                         os.exit(1)

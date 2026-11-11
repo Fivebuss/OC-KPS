@@ -124,6 +124,7 @@ local shellState = {
     locals = {},      -- variables
     scriptArgs = nil, -- $0, $1, etc
     aliases = {},
+    readonlys = {},
     currPath = "/",
     lastExitCode = 0,
     fgBusy = false,       -- true while a foreground pipeline is actually going
@@ -140,8 +141,27 @@ local function inSubshell()
     return shellStates[process.activeThread()] ~= nil
 end
 
+-- yeah scripts shouldnt cause issues
+local fatalScriptError = false
+
+local function isRunningScript()
+    return st().scriptArgs ~= nil
+end
+
+-- Variables that refuse to change their values
+local function wasReadonly(name)
+    writeRed(process.error(), "ksh: " .. name .. ": readonly variable", "\n")
+end
+
+-- Deal with the markers
+local function unwrapAll(s)
+    s = s:gsub("\006(.)\007", "%1")
+    return (s:gsub("[\001\002\003\004\005\006\007]", ""))
+end
+
 -- This is cursed, il pull a mshell
 local captureSubshell, spawnSubshell, executeTokens, runScriptLines
+local snapshotState
 
 local function drawPrompt()
     tty:write(st().currPath .. "> ")
@@ -249,19 +269,26 @@ local function lookupVar(name, getenv)
 end
 
 -- support for :-  :=  :+  :?
-local function applyOperator(name, op, arg, value)
-    if value ~= nil and value ~= "" then
+local function applyOperator(name, op, arg, value, colon)
+    local isset = value ~= nil and (not colon or value ~= "")
+    if isset then
         if op == "+" then return arg end
         return value
     end
 
     if op == "-" then return arg end
     if op == "=" then
+        if st().readonlys[name] then
+            -- Reported by the segment layer, dont double print here
+            return nil, name .. ": readonly variable"
+        end
+        arg = unwrapAll(arg)
         st().locals[name] = arg
         return arg
     end
     if op == "?" then
-        return nil, arg ~= "" and arg or (name .. ": parameter not set")
+        local msg = arg ~= "" and arg or "parameter not set"
+        return nil, name .. ": " .. msg
     end
     return "" -- :+ with unset value
 end
@@ -285,10 +312,68 @@ local function evaluateArithmetic(expr, getenv)
     local POW = function(a, b) return (tonumber(a) or 0) ^ (tonumber(b) or 0) end
     local XOR = function(a, b) return (tonumber(a) or 0) ~ (tonumber(b) or 0) end
 
-    local TERN = function(c, x, y)
+    local TERN = function(c, fx, fy)
         local truth = type(c) == "boolean" and c or ((tonumber(c) or 0) ~= 0)
-        if truth then return x end
-        return y
+        if truth then return fx() end
+        return fy()
+    end
+
+    local TB = function(v)
+        if type(v) == "boolean" then return v end
+        return (tonumber(v) or 0) ~= 0
+    end
+
+    local TN = function(v)
+        if v == true then return 1 end
+        if v == false then return 0 end
+        return tonumber(v) or 0
+    end
+
+    -- why bash must be like this
+    local DIV = function(a, b)
+        a = math.floor(tonumber(a) or 0)
+        b = math.floor(tonumber(b) or 0)
+        if b == 0 then error("division by 0", 0) end
+        local q = a / b
+        if q >= 0 then return math.floor(q) end
+
+        return math.ceil(q)
+    end
+    local MOD = function(a, b)
+        a = math.floor(tonumber(a) or 0)
+        b = math.floor(tonumber(b) or 0)
+        if b == 0 then error("division by 0", 0) end
+
+        return a - DIV(a, b) * b
+    end
+
+    local function splitTopLevel(e, op)
+        local n, depth, i = #e, 0, 1
+        local parts, buf = {}, {}
+
+        while i <= n do
+            local c = e:sub(i, i)
+            if c == "(" then
+                depth = depth + 1
+                buf[#buf + 1] = c
+                i = i + 1
+            elseif c == ")" then
+                depth = depth - 1
+                buf[#buf + 1] = c
+                i = i + 1
+            elseif depth == 0 and e:sub(i, i + #op - 1) == op then
+                parts[#parts + 1] = table.concat(buf)
+                buf = {}
+                i = i + #op
+            else
+                buf[#buf + 1] = c
+                i = i + 1
+            end
+        end
+        parts[#parts + 1] = table.concat(buf)
+
+        if #parts == 1 then return nil end
+        return parts
     end
 
     -- Replace vars
@@ -308,6 +393,11 @@ local function evaluateArithmetic(expr, getenv)
 
         if op == "-" then return arg end
         if op == "=" then
+            if st().readonlys[name] then
+                wasReadonly(name)
+                return "0"
+            end
+
             st().locals[name] = arg
             return arg
         end
@@ -316,6 +406,7 @@ local function evaluateArithmetic(expr, getenv)
             writeRed(process.error(), "ksh: " .. name .. ": " .. (arg ~= "" and arg or "parameter not set"), "\n")
             return "0"
         end
+
         return "0"
     end)
 
@@ -335,6 +426,17 @@ local function evaluateArithmetic(expr, getenv)
         return varValue(sym)
     end)
 
+    -- screw it lets go left to right
+    local commaParts = splitTopLevel(expr, ",")
+    if commaParts then
+        local lastVal = 0
+        for _, cp in ipairs(commaParts) do
+            lastVal = evaluateArithmetic(cp, getenv)
+        end
+
+        return lastVal
+    end
+
     local aname, aop, arhs = expr:match("^%s*([%a_][%w_]*)%s*([%+%-*/%%]?)=%s*(.+)$") -- Thank goodness for lua pattern maker!
     if aname and arhs:sub(1, 1) ~= "=" then
         local rhs = math.floor(tonumber(evaluateArithmetic(arhs, getenv)) or 0)
@@ -347,10 +449,16 @@ local function evaluateArithmetic(expr, getenv)
         elseif aop == "*" then
             newv = cur * rhs
         elseif aop == "/" then
-            if rhs == 0 then newv = 0 else newv = math.floor(cur / rhs) end
+            if rhs == 0 then newv = 0 else newv = DIV(cur, rhs) end
         elseif aop == "%" then
-            if rhs == 0 then newv = 0 else newv = cur % rhs end
+            if rhs == 0 then newv = 0 else newv = MOD(cur, rhs) end
         end
+
+        if st().readonlys[aname] then
+            wasReadonly(aname)
+            return newv
+        end
+
         st().locals[aname] = tostring(newv)
         return newv
     end
@@ -360,6 +468,11 @@ local function evaluateArithmetic(expr, getenv)
     if pname or dname then
         local nm = pname or dname
         local cur = math.floor(tonumber(lookupVar(nm, getenv)) or 0)
+        if st().readonlys[nm] then
+            wasReadonly(nm)
+            return cur
+        end
+
         st().locals[nm] = tostring(cur + (pname and 1 or -1))
         return cur
     end
@@ -369,6 +482,11 @@ local function evaluateArithmetic(expr, getenv)
     if pname or dname then
         local nm = pname or dname
         local cur = math.floor(tonumber(lookupVar(nm, getenv)) or 0) + (pname and 1 or -1)
+        if st().readonlys[nm] then
+            wasReadonly(nm)
+            return cur
+        end
+
         st().locals[nm] = tostring(cur)
         return cur
     end
@@ -381,11 +499,320 @@ local function evaluateArithmetic(expr, getenv)
     end)
 
     expr = expr:gsub("!=", "~=")
-    expr = expr:gsub("([%w_.]+)%*%*([%w_.]+)", "POW(%1,%2)")
-    expr = expr:gsub("([%w_.]+)%^([%w_.]+)", "XOR(%1,%2)")
+    -- Why lua must you not use C style stuff natively? WHY
+    local function getOperandLeft(s, endIdx)
+        local b = endIdx
+        while b >= 1 and s:sub(b, b) == " " do b = b - 1 end
+        if b < 1 then return nil end
+        local a
+        if s:sub(b, b) == ")" then
+            local d = 0
+            a = b
+            while a >= 1 do
+                local cc = s:sub(a, a)
+                if cc == ")" then
+                    d = d + 1
+                elseif cc == "(" then
+                    d = d - 1
+                    if d == 0 then break end
+                end
+                a = a - 1
+            end
+
+            if a < 1 then return nil end
+            -- I learned what a callee prefix is wow
+            while a > 1 and s:sub(a - 1, a - 1):match("[%w%.]") do
+                a = a - 1
+            end
+        else
+            a = b
+            while a >= 1 and s:sub(a, a):match("[%w%.]") do
+                a = a - 1
+            end
+            a = a + 1
+            if a > b then return nil end
+        end
+        -- Give me a sign
+        while a > 1 and (s:sub(a - 1, a - 1) == "-" or s:sub(a - 1, a - 1) == "+") do
+            local before = (a - 2 >= 1) and s:sub(a - 2, a - 2) or ""
+            if before:match("[%w%._%)]") then break end
+            a = a - 1
+        end
+
+        return a, b
+    end
+
+    local function getRight(s, opIdx)
+        local a = opIdx + 1
+        while a <= #s and s:sub(a, a) == " " do
+            a = a + 1
+        end
+        if a > #s then return nil end
+        local b = a
+        -- n ** -(n + n)
+        while s:sub(b, b) == "-" or s:sub(b, b) == "+" do
+            b = b + 1
+        end
+        if s:sub(b, b) == "(" then
+            local d, j = 0, b
+            while j <= #s do
+                local cc = s:sub(j, j)
+                if cc == "(" then
+                    d = d + 1
+                elseif cc == ")" then
+                    d = d - 1
+                    if d == 0 then break end
+                end
+                j = j + 1
+            end
+
+            return a, j
+        end
+        while b <= #s and s:sub(b, b):match("[%w%.]") do
+            b = b + 1
+        end
+        -- just one
+        if s:sub(b, b) == "(" then
+            local d, j = 0, b
+            while j <= #s do
+                local cc = s:sub(j, j)
+                if cc == "(" then
+                    d = d + 1
+                elseif cc == ")" then
+                    d = d - 1
+                    if d == 0 then
+                        b = j + 1
+                        break
+                    end
+                end
+                j = j + 1
+            end
+        end
+        b = b - 1
+        if b < a then return nil end
+
+        return a, b
+    end
+
+    -- Whats on the left?
+    local function getLeft(s, ops)
+        ops = ops or "*/%"
+        local a = getOperandLeft(s, #s)
+        if not a then return nil end
+        while true do
+            local k = a - 1
+            while k >= 1 and s:sub(k, k) == " " do
+                k = k - 1
+            end
+
+            local c = k >= 1 and s:sub(k, k) or ""
+            if c ~= "" and ops:find(c, 1, true) then
+                local a2 = getOperandLeft(s, k - 1)
+                if not a2 then
+                    break
+                end
+                a = a2
+            else
+                break
+            end
+        end
+
+        return a
+    end
+
+    local function dealWithDivMod(e)
+        local acc = ""
+        local i = 1
+        while i <= #e do
+            local c = e:sub(i, i)
+            if c == "(" then
+                -- you okay nest?
+                local d, j = 0, i
+                while j <= #e do
+                    local cc = e:sub(j, j)
+                    if cc == "(" then
+                        d = d + 1
+                    elseif cc == ")" then
+                        d = d - 1
+                        if d == 0 then break end
+                    end
+                    j = j + 1
+                end
+
+                acc = acc .. "(" .. dealWithDivMod(e:sub(i + 1, j - 1)) .. ")"
+                i = j + 1
+            elseif (c == "/" or c == "%")
+                and not (c == "/" and e:sub(i + 1, i + 1) == "/") then
+                local ca, cb = getRight(e, i)
+                local aStart = ca and getLeft(acc) or nil
+                if aStart then
+                    local left = acc:sub(aStart)
+                    local right = e:sub(ca, cb)
+                    local piece = (c == "/" and "DIV(" or "MOD(") ..
+                        left .. "," .. right .. ")"
+                    acc = acc:sub(1, aStart - 1) .. piece
+                    i = cb + 1
+                else
+                    acc = acc .. c
+                    i = i + 1
+                end
+            else
+                acc = acc .. c
+                i = i + 1
+            end
+        end
+
+        return acc
+    end
+
+    -- Its because of things on the right
+    local function matchParenAt(e, start)
+        local d = 0
+        for j = start, #e do
+            local cc = e:sub(j, j)
+            if cc == "(" then
+                d = d + 1
+            elseif cc == ")" then
+                d = d - 1
+                if d == 0 then return j end
+            end
+        end
+
+        return nil
+    end
+
+    local function dealWithPow(e)
+        local acc = {}
+        local n = #e
+        local i = 1
+        while i <= n do
+            local c = e:sub(i, i)
+            if c == "(" then
+                local j = matchParenAt(e, i)
+                if not j then
+                    acc[#acc + 1] = e:sub(i)
+                    break
+                end
+                acc[#acc + 1] = "(" .. dealWithPow(e:sub(i + 1, j - 1)) .. ")"
+                i = j + 1
+            elseif c == "*" and e:sub(i + 1, i + 1) == "*" then
+                local accStr = table.concat(acc)
+                local aStart = #accStr > 0 and getOperandLeft(accStr, #accStr) or nil
+                if not aStart then
+                    acc[#acc + 1] = "**"
+                    i = i + 2
+                else
+                    -- Its because of **
+                    local primaries = {}
+                    local p = i + 2
+                    while true do
+                        while p <= n and e:sub(p, p) == " " do p = p + 1 end
+                        local primStart = p
+                        while p <= n and (e:sub(p, p) == "-" or e:sub(p, p) == "+") do
+                            p = p + 1
+                            while p <= p and p <= n and e:sub(p, p) == " " do p = p + 1 end
+                        end
+
+                        local coreStart = p
+                        local core = nil
+                        if p <= n and e:sub(p, p) == "(" then
+                            local j = matchParenAt(e, p)
+                            if j then
+                                core = "(" .. dealWithPow(e:sub(p + 1, j - 1)) .. ")"
+                                p = j + 1
+                            end
+                        else
+                            while p <= n and e:sub(p, p):match("[%w%.]") do
+                                p = p + 1
+                            end
+                            if p > coreStart then
+                                core = e:sub(coreStart, p - 1)
+                            end
+                        end
+
+                        if not core then
+                            ---@diagnostic disable-next-line: cast-local-type
+                            p = nil -- This causes problems
+                            break
+                        end
+
+                        primaries[#primaries + 1] = e:sub(primStart, coreStart - 1) .. core
+                        local q = p
+                        while q <= n and e:sub(q, q) == " " do q = q + 1 end
+                        if e:sub(q, q + 1) == "**" then
+                            p = q + 2
+                        else
+                            break
+                        end
+                    end
+                    if not p then
+                        acc[#acc + 1] = "**"
+                        i = i + 2
+                    else
+                        local right = primaries[#primaries]
+                        for k = #primaries - 1, 1, -1 do
+                            right = "POW(" .. primaries[k] .. "," .. right .. ")"
+                        end
+
+                        acc = {
+                            accStr:sub(1, aStart - 1) ..
+                            "POW(" .. accStr:sub(aStart) .. "," .. right .. ")"
+                        }
+                        i = p
+                    end
+                end
+            else
+                acc[#acc + 1] = c
+                i = i + 1
+            end
+        end
+
+        return table.concat(acc)
+    end
+
+    expr = dealWithPow(expr)
+
+    expr = dealWithDivMod(expr)
+
+    -- Because of ^
+    local function dealWithXor(e)
+        local acc = ""
+        local i = 1
+        while i <= #e do
+            local c = e:sub(i, i)
+            if c == "(" then
+                local j = matchParenAt(e, i)
+                if not j then
+                    acc = acc .. e:sub(i)
+                    break
+                end
+
+                acc = acc .. "(" .. dealWithXor(e:sub(i + 1, j - 1)) .. ")"
+                i = j + 1
+            elseif c == "^" then
+                local ca, cb = getRight(e, i)
+                local aStart = ca and getLeft(acc, "+-*/%") or nil
+                if aStart then
+                    local left = acc:sub(aStart)
+                    local right = e:sub(ca, cb)
+                    acc = acc:sub(1, aStart - 1) .. "XOR(" .. left .. "," .. right .. ")"
+                    i = cb + 1
+                else
+                    acc = acc .. c
+                    i = i + 1
+                end
+            else
+                acc = acc .. c
+                i = i + 1
+            end
+        end
+
+        return acc
+    end
+    expr = dealWithXor(expr)
 
     -- Who even uses this? I guess me
-    local function translateTernary(e)
+    local function dealWithTernary(e)
         local depth, qpos = 0, nil
 
         for i = 1, #e do
@@ -400,7 +827,7 @@ local function evaluateArithmetic(expr, getenv)
             end
         end
         if not qpos then return e end
-        local cond = translateTernary(e:sub(1, qpos - 1))
+        local cond = dealWithTernary(e:sub(1, qpos - 1))
         depth = 0
         local ternDepth, colon = 0, nil
 
@@ -423,15 +850,82 @@ local function evaluateArithmetic(expr, getenv)
             end
         end
         if not colon then return e end
-        return "TERN(" .. cond .. "," ..
-            translateTernary(e:sub(qpos + 1, colon - 1)) .. "," ..
-            translateTernary(e:sub(colon + 1)) .. ")"
+        -- You are not the chosen one
+        return "TERN(" .. cond .. ",function() return " ..
+            dealWithTernary(e:sub(qpos + 1, colon - 1)) .. " end,function() return " ..
+            dealWithTernary(e:sub(colon + 1)) .. " end)"
     end
-    expr = translateTernary(expr)
+    expr = dealWithTernary(expr)
+
+    -- Of course math has || and && in it. Why wouldnt it. Lovely
+    local function dealWithLogic(e, top)
+        local orParts = splitTopLevel(e, "||")
+        local andParts = not orParts and splitTopLevel(e, "&&") or nil
+
+        if orParts or andParts then
+            local t = {}
+            for i, p in ipairs(orParts or andParts) do
+                t[i] = "TB((" .. dealWithLogic(p) .. "))"
+            end
+
+            local joined = table.concat(t, orParts and " or " or " and ")
+            return top and ("TN(" .. joined .. ")") or joined
+        end
+
+        local n, i = #e, 1
+        local buf = {}
+        -- This hopefully wont fail?
+        while i <= n do
+            local c = e:sub(i, i)
+            if c == "(" then
+                local depth, j = 1, i + 1
+                while j <= n and depth > 0 do
+                    local d = e:sub(j, j)
+                    if d == "(" then
+                        depth = depth + 1
+                    elseif d == ")" then
+                        depth = depth - 1
+                    end
+                    j = j + 1
+                end
+
+                local inner = e:sub(i + 1, j - 2)
+                local segs, cur, sd = {}, {}, 0
+                for ci = 1, #inner do
+                    local d = inner:sub(ci, ci)
+                    if d == "(" then
+                        sd = sd + 1
+                    elseif d == ")" then
+                        sd = sd - 1
+                    end
+                    if sd == 0 and d == "," then
+                        segs[#segs + 1] = table.concat(cur)
+                        cur = {}
+                    else
+                        cur[#cur + 1] = d
+                    end
+                end
+                segs[#segs + 1] = table.concat(cur)
+
+                local tr = {}
+                for si, s in ipairs(segs) do
+                    tr[si] = dealWithLogic(s, true)
+                end
+
+                buf[#buf + 1] = "(" .. table.concat(tr, ",") .. ")"
+                i = j
+            else
+                buf[#buf + 1] = c
+                i = i + 1
+            end
+        end
+        return table.concat(buf)
+    end
+    expr = dealWithLogic(expr, true)
 
     -- Kindly dont crash my shell though. MShell sure got that wrong...
     local fn, err = load("return " .. expr, "=arithmetic", "t",
-        { math = math, POW = POW, XOR = XOR, TERN = TERN })
+        { math = math, POW = POW, XOR = XOR, TERN = TERN, TB = TB, TN = TN, DIV = DIV, MOD = MOD })
     if not fn then
         writeRed(process.error(), "ksh: arithmetic error: " .. tostring(err), "\n")
         return 0
@@ -440,6 +934,7 @@ local function evaluateArithmetic(expr, getenv)
     local ok, result = pcall(fn)
     if not ok then
         writeRed(process.error(), "ksh: arithmetic error: " .. tostring(result), "\n")
+        if isRunningScript() then fatalScriptError = true end
         return 0
     end
     if result == true then return 1 end
@@ -448,7 +943,16 @@ local function evaluateArithmetic(expr, getenv)
 end
 
 -- Gross.
-local function expandCommandSubstitutions(str, getenv)
+
+-- I cheat here so I dont expand badly. Who cares, you wont see it anyway (hopefully)
+local function zoneMark(s, quoted)
+    if quoted or #s == 0 then
+        return s
+    end
+    return "\002" .. s .. "\003"
+end
+
+local function expandCommandSubstitutions(str, getenv, quoted)
     local out = {}
     local lastStatus
     local i, n = 1, #str
@@ -492,6 +996,7 @@ local function expandCommandSubstitutions(str, getenv)
             out[#out + 1] = str:sub(i)
             break
         end
+
         out[#out + 1] = str:sub(i, nxt - 1)
         local c = str:sub(nxt, nxt)
         if c == "'" then
@@ -500,6 +1005,7 @@ local function expandCommandSubstitutions(str, getenv)
                 out[#out + 1] = str:sub(nxt)
                 break
             end
+
             out[#out + 1] = str:sub(nxt, close)
             i = close + 1
         elseif c == "`" then
@@ -508,8 +1014,9 @@ local function expandCommandSubstitutions(str, getenv)
                 writeRed(process.error(), "ksh: unclosed `", "\n")
                 return table.concat(out), lastStatus
             end
+
             local text, status = runCapture(str:sub(nxt + 1, close - 1), getenv)
-            out[#out + 1] = text
+            out[#out + 1] = zoneMark(text, quoted)
             lastStatus = status
             i = close + 1
         else -- c == "$"
@@ -523,7 +1030,7 @@ local function expandCommandSubstitutions(str, getenv)
 
                 local expr = str:sub(nxt + 3, close - 1)
                 local result = evaluateArithmetic(expr, getenv)
-                out[#out + 1] = tostring(result)
+                out[#out + 1] = zoneMark(tostring(result), quoted)
                 i = close + 1
                 if i <= n and str:sub(i, i) == ")" then
                     i = i + 1
@@ -535,8 +1042,9 @@ local function expandCommandSubstitutions(str, getenv)
                     writeRed(process.error(), "ksh: missing ) to match (", "\n")
                     return table.concat(out), lastStatus
                 end
+
                 local text, status = runCapture(str:sub(nxt + 2, close - 1), getenv)
-                out[#out + 1] = text
+                out[#out + 1] = zoneMark(text, quoted)
                 lastStatus = status
                 i = close + 1
             else
@@ -548,26 +1056,68 @@ local function expandCommandSubstitutions(str, getenv)
     return table.concat(out), lastStatus
 end
 
--- Todo: make even better
-local function expandVars(str, getenv)
+-- Todo: make even better. Todo one month later: Figure out when I will do that
+
+-- STOP SPLITTING I BEG YOU
+local function literalWrap(s)
+    return s:gsub("\\(.)", "\006%1\007")
+end
+
+local function expandVars(str, getenv, quoted)
     local failMsg
     local subStatus
     -- subs go first!
-    str, subStatus = expandCommandSubstitutions(str, getenv)
+    str, subStatus = expandCommandSubstitutions(str, getenv, quoted)
     local out = str:gsub("%$%b{}", function(tok)
         local body = tok:sub(3, -2)
+
+        -- expansions used as another shell variable. Yes this happens
+        if #body >= 2 and body:sub(1, 1) == "#" then
+            local nm = body:sub(2)
+            if nm:match("^[%a_][%w_]*$") or nm:match("^%d+$") or nm == "@" or nm == "*" then
+                if nm == "@" or nm == "*" then
+                    if st().scriptArgs then
+                        return zoneMark(tostring(math.max(0, #st().scriptArgs - 1)), quoted)
+                    end
+                    return zoneMark("0", quoted)
+                end
+                local v = tostring(lookupVar(nm, getenv) or "")
+                return zoneMark(tostring(#v), quoted)
+            end
+        end
+
         local name, op, arg = body:match("^([%a_][%w_]*):([%-=+?])(.*)$")
+        local colon = not not name
+        if not name then
+            name, op, arg = body:match("^([%a_][%w_]*)([%-=+?])(.+)$")
+        end
+
         if name then
-            arg = expandVars(arg, getenv)
-            local result, err = applyOperator(name, op, arg, lookupVar(name, getenv))
+            -- Little cheat
+            local value = lookupVar(name, getenv)
+            local isset = value ~= nil and (not colon or value ~= "")
+            local useArg
+            if op == "+" then
+                useArg = isset
+            else
+                useArg = not isset
+            end
+
+            if not useArg then
+                if op == "+" then return "" end
+                return zoneMark(value, quoted)
+            end
+
+            arg = expandVars(arg, getenv, quoted)
+            local result, err = applyOperator(name, op, arg, value, colon)
             if err then failMsg = failMsg or err end
-            return result or ""
+            return zoneMark(result or "", quoted)
         end
 
         local iname = body:match("^!(.+)$")
         if iname then
             local ref = lookupVar(iname, getenv)
-            return lookupVar(ref or "", getenv) or ""
+            return zoneMark(lookupVar(ref or "", getenv) or "", quoted)
         end
 
         -- Why must escaped env variables exist? Like wtf is this pattern I made 5 years ago dude
@@ -578,27 +1128,68 @@ local function expandVars(str, getenv)
             if start < 0 then
                 start = math.max(#val + start, 0)
             end
+
             if slen ~= "" then
                 local len = tonumber(slen)
                 if len < 0 then
-                    return val:sub(start + 1, math.max(#val + len, start))
+                    return zoneMark(val:sub(start + 1, math.max(#val + len, start)), quoted)
                 end
-                return val:sub(start + 1, start + len)
+                return zoneMark(val:sub(start + 1, start + len), quoted)
             end
-            return val:sub(start + 1)
+            return zoneMark(val:sub(start + 1), quoted)
         end
 
-        local rname, sep, rest = body:match("^([%a_][%w_]*)(/+)(.*)$")
+        -- Fixes weirdness with escaped things. Again
+        local rname = body:match("^([%a_][%w_]*)/+")
         if rname then
             local val = tostring(lookupVar(rname, getenv) or "")
-            local pat, rep = rest:match("^([^/]*)/(.*)$")
-            pat = pat or ""
-            rep = rep or ""
-            local luaPat = ""
+            local afterName = body:sub(#rname + 1)
+            local sepEnd = 1
+            while afterName:sub(sepEnd, sepEnd) == "/" do
+                sepEnd = sepEnd + 1
+            end
 
+            local global = (sepEnd - 1) >= 2
+            local rest = afterName:sub(sepEnd)
+            local patChars, wasEsc = {}, {}
+            local esc = false
+            local cut = nil
+
+            for k = 1, #rest do
+                local c = rest:sub(k, k)
+                if esc then
+                    esc = false
+                    local idx = #patChars + 1
+                    patChars[idx] = c
+                    wasEsc[idx] = true
+                elseif c == "\\" then
+                    esc = true
+                elseif c == "/" then
+                    cut = k
+                    break
+                else
+                    local idx = #patChars + 1
+                    patChars[idx] = c
+                    wasEsc[idx] = false
+                end
+            end
+
+            local pat = table.concat(patChars)
+            local rep = cut and rest:sub(cut + 1) or ""
+            if pat == "" then
+                return zoneMark(val, quoted)
+            end
+
+            local luaPat = ""
             for idx = 1, #pat do
                 local c = pat:sub(idx, idx)
-                if c == "*" then
+                if wasEsc[idx] then
+                    if c:match("%W") then
+                        luaPat = luaPat .. "%" .. c
+                    else
+                        luaPat = luaPat .. c
+                    end
+                elseif c == "*" then
                     luaPat = luaPat .. ".*"
                 elseif c == "?" then
                     luaPat = luaPat .. "."
@@ -608,14 +1199,16 @@ local function expandVars(str, getenv)
                     luaPat = luaPat .. c
                 end
             end
-            if sep == "//" then
-                return (val:gsub(luaPat, function() return rep end))
+
+            rep = (rep:gsub("\\(.)", "%1"))
+            if global then
+                return zoneMark((val:gsub(luaPat, function() return rep end)), quoted)
             end
             local s, e = val:find(luaPat)
             if s then
-                return val:sub(1, s - 1) .. rep .. val:sub(e + 1)
+                return zoneMark(val:sub(1, s - 1) .. rep .. val:sub(e + 1), quoted)
             end
-            return val
+            return zoneMark(val, quoted)
         end
 
         local prefixName, prefixOp, prefPat = body:match("^([%a_][%w_]*)(##?)(.+)$")
@@ -634,11 +1227,12 @@ local function expandVars(str, getenv)
                     luaPat = luaPat .. c
                 end
             end
+
             local s, e = val:find("^" .. luaPat)
             if s then
-                return val:sub(e + 1)
+                return zoneMark(val:sub(e + 1), quoted)
             end
-            return val
+            return zoneMark(val, quoted)
         end
 
         local suffixName, suffixOp, sufPat = body:match("^([%a_][%w_]*)(%%?%%)(.+)$")
@@ -657,32 +1251,33 @@ local function expandVars(str, getenv)
                     luaPat = luaPat .. c
                 end
             end
+
             local j = (suffixOp == "%%") and 1 or #val
             local step = (suffixOp == "%%") and 1 or -1
             while j >= 1 and j <= #val do
                 if val:sub(j):match("^" .. luaPat .. "$") then
-                    return val:sub(1, j - 1)
+                    return zoneMark(val:sub(1, j - 1), quoted)
                 end
                 j = j + step
             end
-            return val
+            return zoneMark(val, quoted)
         end
 
-        if body == "?" then return tostring(st().lastExitCode) end
-        if body == "$" then return tostring(shellPid or 0) end
-        return lookupVar(body, getenv) or ""
+        if body == "?" then return zoneMark(tostring(st().lastExitCode), quoted) end
+        if body == "$" then return zoneMark(tostring(shellPid or 0), quoted) end
+        return zoneMark(lookupVar(body, getenv) or "", quoted)
     end)
 
-    out = out:gsub("%$%?", tostring(st().lastExitCode))
-    out = out:gsub("%$%$", tostring(shellPid or 0))
+    out = out:gsub("%$%?", function() return zoneMark(tostring(st().lastExitCode), quoted) end)
+    out = out:gsub("%$%$", function() return zoneMark(tostring(shellPid or 0), quoted) end)
     out = out:gsub("%$([%d]+)", function(num)
-        return lookupVar(num, getenv) or ""
+        return zoneMark(lookupVar(num, getenv) or "", quoted)
     end)
     out = out:gsub("%$([#@*0])", function(sym)
-        return lookupVar(sym, getenv) or ""
+        return zoneMark(lookupVar(sym, getenv) or "", quoted)
     end)
     out = out:gsub("%$([%a_][%w_]*)", function(name)
-        return lookupVar(name, getenv) or ""
+        return zoneMark(lookupVar(name, getenv) or "", quoted)
     end)
     return out, failMsg, subStatus
 end
@@ -692,12 +1287,14 @@ local function protectEscapedDollar(str)
     return str:gsub("\\%$", "\000ESCAPED_DOLLAR\000")
 end
 
+-- Give me regex please I dont want to do this
 local function restoreEscapedDollar(str)
     return str:gsub("%zESCAPED_DOLLAR%z", "$")
 end
 
 -- Fine il do it again...
-local function expandToken(w, getenv)
+-- And again apparently. Can you keep something for me?
+local function expandToken(w, getenv, keepMarkers)
     local quotes = {
         { "'", "'" },
         { '"', '"' }
@@ -716,30 +1313,44 @@ local function expandToken(w, getenv)
     end
 
     -- please dont crash please dont crash
+    local escaped = false
+    local lastClosedQuote = nil
     for i = 1, #w do
         local char = w:sub(i, i)
         local top = frames[#frames]
         local qhere = (top and top.lvl == depth) and top.q or nil
 
-        if char == "(" then
+        -- This is all quote stuff
+        if escaped then
+            escaped = false
+            cur.txt = cur.txt .. char
+            prevDollar = false
+        elseif char == "\\" and (not qhere or (qhere == '"')) then
+            escaped = true
+            prevDollar = false
+        elseif char == "(" then
             if not qhere or (prevDollar and qhere ~= "'") then
                 depth = depth + 1
             end
+
             cur.txt = cur.txt .. char
             prevDollar = false
         elseif char == ")" then
             if not qhere and depth > 0 then
                 depth = depth - 1
             end
+
             cur.txt = cur.txt .. char
             prevDollar = false
         elseif qhere and qhere == char then
+            lastClosedQuote = qhere
             table.remove(frames)
-            if #frames > 0 then
+            if #frames > 0 or depth > 0 then
                 cur.txt = cur.txt .. char
             else
                 flush()
             end
+
             prevDollar = false
         elseif qhere then
             cur.txt = cur.txt .. char
@@ -751,7 +1362,9 @@ local function expandToken(w, getenv)
             end
 
             if rec then
-                if top then
+                local atSegmentStart = (cur.kind == "raw" and #cur.txt == 0)
+                local isConcat = (lastClosedQuote == rec[1] and cur.kind == "raw")
+                if top or depth > 0 or (not atSegmentStart and not isConcat) then
                     cur.txt = cur.txt .. char
                 else
                     flush()
@@ -767,24 +1380,30 @@ local function expandToken(w, getenv)
     end
     flush()
 
+    -- Even MORE quote stuff. I forgot about these...
     local result = ""
     local failMsg, subStatus
     for _, seg in ipairs(segs) do
         if seg.kind == "'" then
-            result = result .. seg.txt
+            local txt = seg.txt
+            if txt == "" and #segs > 1 then
+                txt = "'"
+            end
+            result = result .. "\004" .. txt .. "\005"
         elseif seg.kind == '"' then
             local inner = protectEscapedDollar(seg.txt)
             inner = inner:gsub("\\([`\"\\])", "%1")
-            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv)
+            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv, true)
             failMsg = failMsg or failMsg2
             subStatus = subStatus or subStatus2
-            result = result .. restoreEscapedDollar(expanded)
+            result = result .. "\004" .. restoreEscapedDollar(expanded) .. "\005"
         else
-            local inner = protectEscapedDollar(seg.txt)
-            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv)
+            local inner = protectEscapedDollar(literalWrap(seg.txt))
+            local expanded, failMsg2, subStatus2 = expandVars(inner, getenv, false)
             failMsg = failMsg or failMsg2
             subStatus = subStatus or subStatus2
             expanded = restoreEscapedDollar(expanded)
+
             if expanded == "~" or expanded:sub(1, 2) == "~/" then
                 local home = getenv("HOME") or "/"
                 expanded = home .. expanded:sub(2)
@@ -792,6 +1411,18 @@ local function expandToken(w, getenv)
             result = result .. expanded
         end
     end
+
+    if failMsg then
+        failMsg = failMsg:gsub("%zESCAPED_DOLLAR%z", "$")
+        failMsg = failMsg:gsub("\006(.)\007", "%1")
+        failMsg = (failMsg:gsub("[\001\002\003\004\005\006\007]", ""))
+    end
+
+    if not keepMarkers then
+        result = result:gsub("\006(.)\007", "%1")
+        result = (result:gsub("[\001\002\003\004\005\006\007]", ""))
+    end
+
     return result, failMsg, subStatus
 end
 
@@ -833,16 +1464,30 @@ local function expandWildcard(str)
     -- I do not know why the carrot is called pat.
     -- Not my code anyway but its nice
     local luaPat = "^"
-    for idx = 1, #pat do
-        local c = pat:sub(idx, idx)
-        if c == "*" then
-            luaPat = luaPat .. ".*"
-        elseif c == "?" then
-            luaPat = luaPat .. "."
-        elseif c:match("%W") then
-            luaPat = luaPat .. "%" .. c
-        else
-            luaPat = luaPat .. c
+    do
+        local esc = false
+        for idx = 1, #pat do
+            local c = pat:sub(idx, idx)
+            if c == "\001" then
+                esc = true
+            elseif esc then
+                esc = false
+                if c:match("%W") then
+                    luaPat = luaPat .. "%" .. c
+                else
+                    luaPat = luaPat .. c
+                end
+            elseif c == "\\" then
+                esc = true
+            elseif c == "*" then
+                luaPat = luaPat .. ".*"
+            elseif c == "?" then
+                luaPat = luaPat .. "."
+            elseif c:match("%W") then
+                luaPat = luaPat .. "%" .. c
+            else
+                luaPat = luaPat .. c
+            end
         end
     end
     luaPat = luaPat .. "$"
@@ -864,6 +1509,7 @@ local function expandWildcard(str)
                     else
                         fullMatch = name
                     end
+
                     table.insert(matches, fullMatch)
                 end
             end
@@ -878,27 +1524,145 @@ local function expandWildcard(str)
     return matches
 end
 
--- deals with redirection
+-- deals with brace expansion (runs on the raw token BEFORE anything else)
 local function expandBraceToken(str)
-    local function splitTopCommas(body)
-        local depth = 0
-        local parts = { "" }
-        local i = 1
-
-        while i <= #body do
-            local c = body:sub(i, i)
-            if c == "{" then
+    -- { braces without quotes }
+    local function findGroupEnd(s, start)
+        local depth, dbr, pdepth = 1, 0, 0
+        local sq, dq, esc = false, false, false
+        local dollarPending = false
+        local j = start + 1
+        while j <= #s do
+            local c = s:sub(j, j)
+            if esc then
+                esc = false
+                dollarPending = false
+            elseif c == "\\" then
+                esc = true
+                dollarPending = false
+            elseif sq then
+                if c == "'" then sq = false end
+                dollarPending = false
+            elseif dq then
+                if c == '"' then dq = false end
+                dollarPending = false
+            elseif c == "'" then
+                sq = true
+                dollarPending = false
+            elseif c == '"' then
+                dq = true
+                dollarPending = false
+            elseif dbr > 0 then
+                if c == "{" then
+                    dbr = dbr + 1
+                elseif c == "}" then
+                    dbr = dbr - 1
+                end
+                dollarPending = false
+            elseif pdepth > 0 then
+                if c == "(" then
+                    pdepth = pdepth + 1
+                elseif c == ")" then
+                    pdepth = pdepth - 1
+                end
+                dollarPending = false
+            elseif c == "$" then
+                dollarPending = true
+            elseif c == "{" and dollarPending then
+                dbr = 1
+                dollarPending = false
+            elseif c == "(" and dollarPending then
+                pdepth = 1
+                dollarPending = false
+            elseif c == "(" then
+                pdepth = pdepth + 1
+                dollarPending = false
+            elseif c == "{" then
                 depth = depth + 1
-                parts[#parts] = parts[#parts] .. c
+                dollarPending = false
+            elseif c == "}" then
+                depth = depth - 1
+                if depth == 0 then
+                    return j
+                end
+                dollarPending = false
+            else
+                dollarPending = false
+            end
+            j = j + 1
+        end
+        return nil
+    end
+
+    local function splitTopCommas(body)
+        local parts = { "" }
+        local cur = 1
+        local depth, dbr, pdepth = 0, 0, 0
+        local sq, dq, esc = false, false, false
+        local dollarPending = false
+        for k = 1, #body do
+            local c = body:sub(k, k)
+            local skip = false
+            if esc then
+                esc = false
+                dollarPending = false
+            elseif c == "\\" then
+                esc = true
+                dollarPending = false
+            elseif sq then
+                if c == "'" then sq = false end
+                dollarPending = false
+            elseif dq then
+                if c == '"' then dq = false end
+                dollarPending = false
+            elseif c == "'" then
+                sq = true
+                dollarPending = false
+            elseif c == '"' then
+                dq = true
+                dollarPending = false
+            elseif dbr > 0 then
+                if c == "{" then
+                    dbr = dbr + 1
+                elseif c == "}" then
+                    dbr = dbr - 1
+                end
+                dollarPending = false
+            elseif pdepth > 0 then
+                if c == "(" then
+                    pdepth = pdepth + 1
+                elseif c == ")" then
+                    pdepth = pdepth - 1
+                end
+                dollarPending = false
+            elseif c == "$" then
+                dollarPending = true
+            elseif c == "{" and dollarPending then
+                dbr = 1
+                dollarPending = false
+            elseif c == "(" and dollarPending then
+                pdepth = 1
+                dollarPending = false
+            elseif c == "(" then
+                pdepth = pdepth + 1
+                dollarPending = false
+            elseif c == "{" then
+                depth = depth + 1
+                dollarPending = false
             elseif c == "}" then
                 if depth > 0 then depth = depth - 1 end
-                parts[#parts] = parts[#parts] .. c
-            elseif c == "," and depth == 0 then
-                parts[#parts + 1] = ""
+                dollarPending = false
+            elseif c == "," and depth == 0 and pdepth == 0 then
+                cur = cur + 1
+                parts[cur] = ""
+                dollarPending = false
+                skip = true
             else
-                parts[#parts] = parts[#parts] .. c
+                dollarPending = false
             end
-            i = i + 1
+            if not skip then
+                parts[cur] = parts[cur] .. c
+            end
         end
         if #parts > 1 then
             return parts
@@ -906,99 +1670,198 @@ local function expandBraceToken(str)
         return nil
     end
 
-    -- I think I got this right. I refuse to use my own bit32 library haha
-    local function rangeItems(ra, rb)
+    -- Seq
+    local function rangeItems(ra, rb, rs)
         local na, nb = tonumber(ra), tonumber(rb)
         if na and nb then
+            local items = {}
             local width = 0
             if ra:sub(1, 1) == "0" or rb:sub(1, 1) == "0" then
                 width = math.max(#ra, #rb)
             end
-            local fmt = ("%0" .. width .. "d")
-            local items = {}
-            local step = (na <= nb) and 1 or -1
-            local v = na
+            -- Mmmmm larp being like bash
+            if ra:sub(1, 1) == "-" or rb:sub(1, 1) == "-" then
+                width = width + 1
+            end
 
-            while true do
-                items[#items + 1] = string.format(fmt, v)
-                if v == nb then break end
-                v = v + step
+            local step = 1
+            if rs then
+                step = math.floor(math.abs(tonumber(rs) or 0))
+                if step == 0 then step = 1 end
+            end
+
+            local v = na
+            if na <= nb then
+                while v <= nb do
+                    items[#items + 1] = string.format("%0" .. width .. "d", v)
+                    v = v + step
+                end
+            else
+                while v >= nb do
+                    items[#items + 1] = string.format("%0" .. width .. "d", v)
+                    v = v - step
+                end
             end
             return items
         end
         if #ra == 1 and #rb == 1 then
             local ca, cb = ra:byte(), rb:byte()
-            local cOk = (ca >= 65 and ca <= 90) or (ca >= 97 and ca <= 122)
-            local cCb = (cb >= 65 and cb <= 90) or (cb >= 97 and cb <= 122)
-            if cOk and cCb then
+            local aLetter = (ca >= 65 and ca <= 90) or (ca >= 97 and ca <= 122)
+            local bLetter = (cb >= 65 and cb <= 90) or (cb >= 97 and cb <= 122)
+            if aLetter and bLetter then
                 local items = {}
-                local step = (ca <= cb) and 1 or -1
-                local v = ca
-                while true do
-                    items[#items + 1] = string.char(v)
-                    if v == cb then break end
-                    v = v + step
+                local step = 1
+                if rs then
+                    step = math.floor(math.abs(tonumber(rs) or 0))
+                    if step == 0 then step = 1 end
                 end
+
+                local v = ca
+                if ca <= cb then
+                    while v <= cb do
+                        items[#items + 1] = string.char(v)
+                        v = v + step
+                    end
+                else
+                    while v >= cb do
+                        items[#items + 1] = string.char(v)
+                        v = v - step
+                    end
+                end
+
                 return items
             end
         end
         return nil
     end
 
+    local expandOne, expandGroup
+    expandGroup = function(s, open, close, items)
+        local prefix = s:sub(1, open - 1)
+        local suffix = s:sub(close + 1)
+        local out = {}
+        for _, item in ipairs(items) do
+            for _, r in ipairs(expandOne(prefix .. item .. suffix)) do
+                out[#out + 1] = r
+            end
+        end
+        return out
+    end
+
     -- Easy
-    local function expandOne(s)
+    expandOne = function(s)
         local i = 1
+        local esc = false
+        local sq, dq = false, false
+        local dbr, pdepth = 0, 0
+        local dollarPending = false
         while i <= #s do
-            if s:sub(i, i) == "{" then
-                local depth = 1
-                local j = i + 1
-                local found = nil
-
-                while j <= #s and depth > 0 do
-                    local cj = s:sub(j, j)
-                    if cj == "{" then
-                        depth = depth + 1
-                    elseif cj == "}" then
-                        depth = depth - 1
-                        if depth == 0 then found = j end
-                    end
-                    j = j + 1
+            local c = s:sub(i, i)
+            if esc then
+                esc = false
+                dollarPending = false
+                i = i + 1
+            elseif c == "\\" then
+                esc = true
+                dollarPending = false
+                i = i + 1
+            elseif sq then
+                if c == "'" then sq = false end
+                dollarPending = false
+                i = i + 1
+            elseif dq then
+                if c == '"' then dq = false end
+                dollarPending = false
+                i = i + 1
+            elseif c == "'" then
+                sq = true
+                dollarPending = false
+                i = i + 1
+            elseif c == '"' then
+                dq = true
+                dollarPending = false
+                i = i + 1
+            elseif dbr > 0 then
+                if c == "{" then
+                    dbr = dbr + 1
+                elseif c == "}" then
+                    dbr = dbr - 1
                 end
-
-                if found then
-                    local body = s:sub(i + 1, found - 1)
-                    local expandedBodies = nil
-                    local parts = splitTopCommas(body)
-
-                    if parts then
-                        expandedBodies = parts
-                    else
-                        local ra, rb = body:match("^([^,]+)%.%.([^,]+)$")
-                        if ra and rb then
-                            expandedBodies = rangeItems(ra, rb)
-                        end
-                    end
-
-                    if expandedBodies then
-                        local out = {}
-                        local prefix = s:sub(1, i - 1)
-                        local suffix = s:sub(found + 1)
-                        for _, eb in ipairs(expandedBodies) do
-                            local cand = prefix .. eb .. suffix
-                            for _, e2 in ipairs(expandOne(cand)) do
-                                out[#out + 1] = e2
+                dollarPending = false
+                i = i + 1
+            elseif pdepth > 0 then
+                if c == "(" then
+                    pdepth = pdepth + 1
+                elseif c == ")" then
+                    pdepth = pdepth - 1
+                end
+                dollarPending = false
+                i = i + 1
+            elseif c == "$" then
+                dollarPending = true
+                i = i + 1
+            elseif c == "{" and dollarPending then
+                dbr = 1
+                dollarPending = false
+                i = i + 1
+            elseif c == "(" and dollarPending then
+                pdepth = 1
+                dollarPending = false
+                i = i + 1
+            elseif c == "{" then
+                dollarPending = false
+                local close = findGroupEnd(s, i)
+                if close then
+                    local body = s:sub(i + 1, close - 1)
+                    local exp = splitTopCommas(body)
+                    if not exp then
+                        local ra, rb, rs = body:match("^(.-)%.%.(.-)%.%.(.+)$")
+                        if ra then
+                            exp = rangeItems(ra, rb, rs)
+                        else
+                            local ra2, rb2 = body:match("^(.-)%.%.(.+)$")
+                            if ra2 then
+                                exp = rangeItems(ra2, rb2, nil)
                             end
                         end
-                        return out
+                    end
+
+                    if exp then
+                        return expandGroup(s, i, close, exp)
                     end
                 end
+
+                i = i + 1
+            else
+                dollarPending = false
+                i = i + 1
             end
-            i = i + 1 -- this looks aweful. end end end end end
         end
         return { s }
     end
 
-    return expandOne(str)
+    local parts = expandOne(str)
+    -- {,} will stay though
+    if #parts > 1 then
+        local allEmpty = true
+        for _, p in ipairs(parts) do
+            if p ~= "" then
+                allEmpty = false
+                break
+            end
+        end
+        if not allEmpty then
+            local out = {}
+            for _, p in ipairs(parts) do
+                if p ~= "" then
+                    out[#out + 1] = p
+                end
+            end
+
+            return out
+        end
+    end
+    return parts
 end
 
 local function parseSegment(words, getenv)
@@ -1006,7 +1869,7 @@ local function parseSegment(words, getenv)
         return nil, "empty command"
     end
 
-    -- Alias expansion (a subshell group is never an alias)
+    -- Alias expansion but not subshells
     local maxDepth = 10
     while maxDepth > 0 and type(words[1]) == "string" and st().aliases[words[1]] do
         maxDepth = maxDepth - 1
@@ -1042,22 +1905,103 @@ local function parseSegment(words, getenv)
     local function dealWithToken(w)
         local isQuoted = (#w >= 2) and
             ((w:sub(1, 1) == '"' and w:sub(-1) == '"') or (w:sub(1, 1) == "'" and w:sub(-1) == "'"))
-        local expanded, failMsg, subStatus = expandToken(w, getenv)
-        expandFail = expandFail or failMsg
-        if isQuoted then return { expanded } end
-        local braceParts = expandBraceToken(expanded)
+
+        if isQuoted and w:sub(1, 1) == '"' and w:sub(2, -2) == "$@" then
+            local sa = st().scriptArgs
+            if not sa then
+                return {}
+            end
+
+            local t = {}
+            for i = 2, #sa do
+                t[#t + 1] = sa[i]
+            end
+
+            return t
+        end
+
+        -- expand first though
+        local braceParts = expandBraceToken(w)
         local out = {}
 
+        local ifs = lookupVar("IFS", getenv) or " \t\n"
+        local ifsSet = {}
+        if #ifs > 0 then
+            for b = 1, #ifs do
+                ifsSet[ifs:byte(b)] = true
+            end
+        end
+
         for _, part in ipairs(braceParts) do
-            if subStatus ~= nil then
-                for field in part:gmatch("%S+") do
+            local marked, failMsg, subStatus = expandToken(part, getenv, true)
+            expandFail = expandFail or failMsg
+
+            -- field splitting: only whitespace produced by expansions splits
+            local fields = {}
+            local buf = {}
+            local inZone, litGuard, quotedField = 0, false, false
+            local function flushField()
+                local txt = table.concat(buf)
+                if #txt > 0 or quotedField then
+                    fields[#fields + 1] = txt
+                end
+
+                buf = {}
+                quotedField = false
+            end
+            for ci = 1, #marked do
+                local ch = marked:sub(ci, ci)
+                if ch == "\002" then
+                    -- And now my marker thingies pay off
+                    inZone = inZone + 1
+                elseif ch == "\003" then
+                    inZone = inZone - 1
+                elseif ch == "\004" then
+                    quotedField = true
+                    buf[#buf + 1] = ch
+                elseif ch == "\005" then
+                    buf[#buf + 1] = ch
+                elseif ch == "\006" then
+                    litGuard = true
+                    buf[#buf + 1] = ch
+                elseif ch == "\007" then
+                    litGuard = false
+                    buf[#buf + 1] = ch
+                elseif inZone > 0 and not litGuard and ifsSet[ch:byte()] then
+                    flushField()
+                else
+                    buf[#buf + 1] = ch
+                end
+            end
+            flushField()
+
+            for _, field in ipairs(fields) do
+                field = field:gsub("\006(.)\007", "%1")
+                if field:find("\004", 1, true) then
+                    -- glob is a weird name
+                    local shielded = {}
+                    local inQ = false
+                    for g = 1, #field do
+                        local ch = field:sub(g, g)
+                        if ch == "\004" then
+                            inQ = true
+                        elseif ch == "\005" then
+                            inQ = false
+                        elseif ch == "\002" or ch == "\003" then
+                        elseif inQ and (ch == "*" or ch == "?") then
+                            shielded[#shielded + 1] = "\001" .. ch
+                        else
+                            shielded[#shielded + 1] = ch
+                        end
+                    end
+                    for _, m in ipairs(expandWildcard(table.concat(shielded))) do
+                        out[#out + 1] = (m:gsub("\001", ""))
+                    end
+                else
+                    field = (field:gsub("[\001\002\003\004\005\006\007]", ""))
                     for _, m in ipairs(expandWildcard(field)) do
                         out[#out + 1] = m
                     end
-                end
-            else
-                for _, m in ipairs(expandWildcard(part)) do
-                    out[#out + 1] = m
                 end
             end
         end
@@ -1091,6 +2035,7 @@ local function parseSegment(words, getenv)
                 or nxt == "|" or nxt == "&&" or nxt == "||" then
                 return nil, "syntax error near '<<<'"
             end
+
             local fields = dealWithToken(nxt)
             redirects.stdinString = table.concat(fields, " ") .. "\n"
             i = i + 2
@@ -1146,13 +2091,16 @@ local function parseSegment(words, getenv)
                 if subshell then
                     return nil, "syntax error: unexpected word after ( list )"
                 end
+
                 if braceGroup then
                     return nil, "unexpected word after { list }"
                 end
+
                 local expandedList = dealWithToken(w)
                 for _, item in ipairs(expandedList) do
                     args[#args + 1] = item
                 end
+
                 i = i + 1
             end
         end
@@ -1189,6 +2137,7 @@ local function argv(segArgs)
     for i = 2, #segArgs do
         out[i - 1] = segArgs[i]
     end
+
     return out
 end
 
@@ -1280,6 +2229,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         if filesystem.isDirectory(full) then
             return fail(ioErr("is a directory", redirects.stdinFile))
         end
+
         local stream, reason = io.open(full, "r")
         if not stream then return fail(ioErr(reason, redirects.stdinFile)) end
         stdin = stream
@@ -1296,6 +2246,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         if filesystem.isDirectory(full) then
             return fail(ioErr("is a directory", redirects.stdoutFile))
         end
+
         local stream, reason = openForOutput(full, redirects.appendOut)
         if not stream then return fail(ioErr(reason, redirects.stdoutFile)) end
         stdout = stream
@@ -1309,6 +2260,7 @@ local function makeStreams(inPipe, outPipe, redirects)
         if filesystem.isDirectory(full) then
             return fail(ioErr("is a directory", redirects.stderrFile))
         end
+
         local stream, reason = openForOutput(full, redirects.appendStderr)
         if not stream then return fail(ioErr(reason, redirects.stderrFile)) end
         stderr = stream
@@ -1346,6 +2298,7 @@ local function resolveCommand(name, getenv)
         if filesystem.exists(full) and not filesystem.isDirectory(full) then
             return full
         end
+
         if filesystem.exists(full .. ".lua") and not filesystem.isDirectory(full .. ".lua") then
             return full .. ".lua"
         end
@@ -1366,6 +2319,7 @@ local function resolveCommand(name, getenv)
         if filesystem.exists(candidate) and not filesystem.isDirectory(candidate) then
             return candidate
         end
+
         if filesystem.exists(candidate .. ".lua") and not filesystem.isDirectory(candidate .. ".lua") then
             return candidate .. ".lua"
         end
@@ -1432,9 +2386,10 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
 
         if not subshell and not builtin and not resolved then
             writeRed(process.error(), "ksh: command not found: " .. tostring(cmdName), "\n")
+            if isRunningScript() then fatalScriptError = true end
             segmentDone(segIdx, 127, inPipe, outPipe)
         else
-            local stdin, stdout, stderr, err = makeStreams(inPipe, outPipe, seg.redirects)
+            local stdin, stdout, stderr, err, owned = makeStreams(inPipe, outPipe, seg.redirects)
 
             if err then
                 writeRed(process.error(), "ksh: " .. err, "\n")
@@ -1442,7 +2397,26 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
             else
                 spawnedAny = true
 
-                if subshell then
+                if builtin then
+                    -- I support stdio for builtins better now, yes you can io.flush just fine
+                    local savedIO = st().io
+                    st().io = { stdin = stdin, stdout = stdout, stderr = stderr }
+                    local okB, builtinErr = xpcall(function()
+                        builtins[cmdName](argv(seg.args), ownStdin(), ownStdout(), ownStderr())
+                    end, debug.traceback)
+                    st().io = savedIO
+
+                    pcall(function()
+                        if stdout.flush then stdout:flush() end
+                    end)
+                    closeStreams(owned)
+
+                    if not okB then
+                        writeRed(process.error(), tostring(builtinErr), "\n")
+                        st().lastExitCode = 1
+                    end
+                    segmentDone(segIdx, st().lastExitCode, inPipe, outPipe)
+                elseif subshell then
                     local pid = spawnSubshell(subshell, {
                         stdin = stdin,
                         stdout = stdout,
@@ -1461,6 +2435,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                 else
                     local pid
                     pid = process.spawn(function()
+                        shellStates[process.activeThread()] = snapshotState(spawnGid)
                         local env = polaris.env.current()
                         env.console = makeConsole(spawnPwd)
                         env.args = argv(seg.args)
@@ -1534,6 +2509,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         onExit = function(success, exitCode)
                             -- Go away fd table
                             process.destroy(pid)
+                            shellStates[pid] = nil
                             local code = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
                             segmentDone(segIdx, code, inPipe, outPipe)
                         end,
@@ -1612,12 +2588,13 @@ end
 -- Deals with subshell stuff
 
 -- Metatable trick to save memory
-local function snapshotState(gid)
+snapshotState = function(gid)
     local s = st()
     local copy = {
         locals = setmetatable({}, { __index = s.locals }),
         scriptArgs = s.scriptArgs,
         aliases = setmetatable({}, { __index = s.aliases }),
+        readonlys = setmetatable({}, { __index = s.readonlys }),
         currPath = s.currPath,
         lastExitCode = s.lastExitCode,
         fgBusy = false,
@@ -1635,6 +2612,7 @@ spawnSubshell = function(tokens, opts)
     if opts.scriptArgs ~= nil then
         state.scriptArgs = opts.scriptArgs
     end
+
     local tempEnv = opts.tempEnv
     local pid
     pid = process.spawn(function()
@@ -1646,6 +2624,7 @@ spawnSubshell = function(tokens, opts)
                 env.setenv(name, value)
             end
         end
+
         local ok, err = xpcall(function()
             if opts.script then
                 runScriptLines(opts.script, env.getenv)
@@ -1653,6 +2632,7 @@ spawnSubshell = function(tokens, opts)
                 executeTokens(tokens, env.getenv)
             end
         end, debug.traceback)
+
         if not ok then
             pcall(function()
                 process.error():write("\27[31m", tostring(err), "\n\27[0m")
@@ -1674,6 +2654,7 @@ spawnSubshell = function(tokens, opts)
             if tty.detach then
                 tty:detach(pid)
             end
+
             if opts.onExit then
                 opts.onExit(success, exitCode)
             end
@@ -1710,6 +2691,7 @@ captureSubshell = function(tokens, getenv)
             break -- EOF
         end
     end
+
     st().fgBusy = false
     pipe:closeRead()
     return table.concat(chunks), status
@@ -1743,10 +2725,12 @@ local function runScriptSubshell(path, argsTable)
         writeRed(process.error(), "sh: " .. ioErr("no such file or directory", path), "\n")
         return 1
     end
+
     if filesystem.isDirectory(full) then
         writeRed(process.error(), "sh: " .. ioErr("is a directory", path), "\n")
         return 1
     end
+
     local waiterPid = process.activeThread()
     local status = 0
     local done = false
@@ -1767,11 +2751,13 @@ local function runScriptSubshell(path, argsTable)
     while not done do
         process.waitForInput()
     end
+
     st().fgBusy = false
     tty:flush()
     if tty.cx > 1 then
         tty:write("\n")
     end
+
     return status
 end
 
@@ -1801,6 +2787,7 @@ function builtins.cd(args, _, _, _)
         st().lastExitCode = 1
         return
     end
+
     if not filesystem.isDirectory(full) then
         writeRed(process.error(), "cd: not a directory: " .. target, "\n")
         st().lastExitCode = 1
@@ -1917,27 +2904,98 @@ builtins["export"] = function(args, stdin, stdout, stderr)
         return
     end
 
+    local failed = false
+
     for _, arg in ipairs(args) do
         local name, value = arg:match("^([%a_][%w_]*)=(.*)$")
         if name then
-            st().locals[name] = nil
-            env.setenv(name, value)
+            if st().readonlys[name] then
+                wasReadonly(name)
+                failed = true
+            else
+                st().locals[name] = nil
+                env.setenv(name, value)
+            end
         else
             env.setenv(arg, st().locals[arg] or env.getenv(arg))
             st().locals[arg] = nil
         end
     end
-    st().lastExitCode = 0
+    st().lastExitCode = failed and 1 or 0
 end
 
 -- goodbye variable
 builtins["unset"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()
+    local failed = false
     for _, name in ipairs(args) do
-        st().locals[name] = nil
-        env.setenv(name, nil)
+        if st().readonlys[name] then
+            writeRed(process.error(), "ksh: unset: " .. name .. ": cannot unset: readonly variable", "\n")
+            failed = true
+        else
+            st().locals[name] = nil
+            env.setenv(name, nil)
+        end
     end
-    st().lastExitCode = 0
+    st().lastExitCode = failed and 1 or 0
+end
+
+-- Now they are frozen forever
+builtins["readonly"] = function(args, stdin, stdout, stderr)
+    local env = polaris.env.current()
+    local names = {}
+    local listMode = false
+    local failed = false
+
+    for _, arg in ipairs(args) do
+        if arg == "-p" then
+            listMode = true
+        elseif arg:sub(1, 1) == "-" then
+            stderr:write("ksh: readonly: " .. arg .. ": invalid option\n")
+            st().lastExitCode = 2
+            return
+        else
+            names[#names + 1] = arg
+        end
+    end
+
+    if listMode or #names == 0 then
+        -- Subshell stuff? I think I got it write
+        local shown = {}
+        local cur = st().readonlys
+        while cur do
+            for name in pairs(cur) do shown[name] = true end
+            local mt = getmetatable(cur)
+            cur = mt and mt.__index or nil
+        end
+
+        for name in pairs(shown) do
+            local v = lookupVar(name, env.getenv)
+            stdout:write(name .. "=" .. tostring(v ~= nil and v or ""), "\n")
+        end
+
+        st().lastExitCode = 0
+        return
+    end
+
+    for _, item in ipairs(names) do
+        local name, value = item:match("^([%a_][%w_]*)=(.*)$")
+        if name then
+            if st().readonlys[name] then
+                wasReadonly(name)
+                failed = true
+            else
+                st().locals[name] = value
+                st().readonlys[name] = true
+                if env.getenv(name) ~= nil then
+                    env.setenv(name, value)
+                end
+            end
+        else
+            st().readonlys[item] = true
+        end
+    end
+    st().lastExitCode = failed and 1 or 0
 end
 
 -- set hopefully works
@@ -1958,12 +3016,59 @@ builtins["set"] = function(args, stdin, stdout, stderr)
         return
     end
 
+    -- How about you position these arguements set?
+    if args[1] == "--" then
+        local zero = st().scriptArgs and st().scriptArgs[1] or ""
+        local new = { zero }
+
+        for i = 2, #args do
+            new[i] = args[i]
+        end
+
+        st().scriptArgs = new
+        st().lastExitCode = 0
+        return
+    end
+
+    local failed = false
     for _, arg in ipairs(args) do
         local name, value = arg:match("^([%a_][%w_]*)=(.*)$")
         if name then
-            st().locals[name] = value
+            if st().readonlys[name] then
+                wasReadonly(name)
+                failed = true
+            else
+                st().locals[name] = value
+            end
         end
     end
+
+    st().lastExitCode = failed and 1 or 0
+end
+
+-- I went to use this and realized I forgot about it...
+builtins["shift"] = function(args, stdin, stdout, stderr)
+    local n = tonumber(args[1]) or 1
+    local sa = st().scriptArgs
+    local count = sa and (#sa - 1) or 0
+
+    if n < 0 or n > count then
+        stderr:write("ksh: shift: shift count out of range\n")
+        st().lastExitCode = 1
+        return
+    end
+
+    if n == 0 then
+        st().lastExitCode = 0
+        return
+    end
+
+    local new = { sa[1] }
+    for i = 2 + n, #sa do
+        new[#new + 1] = sa[i]
+    end
+
+    st().scriptArgs = new
     st().lastExitCode = 0
 end
 -- omg aliasing finally
@@ -1975,6 +3080,7 @@ builtins["alias"] = function(args, stdin, stdout, stderr)
         st().lastExitCode = 0
         return
     end
+
     for _, arg in ipairs(args) do
         local name, val = arg:match("^([%w_%-]+)=(.*)$")
         if name then
@@ -1989,6 +3095,7 @@ builtins["alias"] = function(args, stdin, stdout, stderr)
             end
         end
     end
+
     st().lastExitCode = 0
 end
 
@@ -1996,6 +3103,7 @@ builtins["unalias"] = function(args, stdin, stdout, stderr)
     for _, arg in ipairs(args) do
         st().aliases[arg] = nil
     end
+
     st().lastExitCode = 0
 end
 
@@ -2091,7 +3199,6 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
         if a == "-s" then
             i = i + 1
             local tok = args[i]
-
             if not tok then
                 stderr:write("kill: -s requires a signal name\n")
                 st().lastExitCode = 1
@@ -2118,7 +3225,6 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             i = i + 1
             local tok = args[i]
             local n = tok and tonumber(tok)
-
             if not n or not process.SIG[n] then
                 stderr:write("kill: -n requires a valid signal number\n")
                 st().lastExitCode = 1
@@ -2131,7 +3237,6 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             -- -SIGNAME or -NUM
             local tok = a:sub(2)
             local n = tonumber(tok) or process.SIG[tok:upper()]
-
             if type(n) ~= "number" then
                 stderr:write("kill: unknown signal: " .. tok .. "\n")
                 st().lastExitCode = 1
@@ -2251,6 +3356,12 @@ builtins["read"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()
 
     if #varNames == 1 then
+        if st().readonlys[varNames[1]] then
+            wasReadonly(varNames[1])
+            st().lastExitCode = 1
+            return
+        end
+
         st().locals[varNames[1]] = line
         env.setenv(varNames[1], line)
     else
@@ -2258,16 +3369,21 @@ builtins["read"] = function(args, stdin, stdout, stderr)
         for word in line:gmatch("%S+") do
             parts[#parts + 1] = word
         end
+
+        local failed = false
         for idx, name in ipairs(varNames) do
-            if idx < #varNames then
-                st().locals[name] = parts[idx] or ""
-                env.setenv(name, parts[idx] or "")
+            local value = (idx < #varNames) and (parts[idx] or "") or table.concat(parts, " ", idx)
+            if st().readonlys[name] then
+                wasReadonly(name)
+                failed = true
             else
-                local rest = table.concat(parts, " ", idx)
-                st().locals[name] = rest
-                env.setenv(name, rest)
+                st().locals[name] = value
+                env.setenv(name, value)
             end
         end
+
+        st().lastExitCode = failed and 1 or 0
+        return
     end
 
     st().lastExitCode = 0
@@ -2334,10 +3450,12 @@ local function splitAssignments(words)
         assigns[#assigns + 1] = { name = name, value = value }
         i = i + 1
     end
+
     local rest = {}
     for j = i, #words do
         rest[#rest + 1] = words[j]
     end
+
     return assigns, rest
 end
 
@@ -2369,6 +3487,7 @@ local function runTimedCommandGroup(rest, assigns, saved, savedNames, getenv)
                 writeRed(process.error(), "ksh: syntax error: " .. err, "\n")
                 st().lastExitCode = 2
             end
+            if isRunningScript() then fatalScriptError = true end
             restoreLocals()
             return
         end
@@ -2401,15 +3520,16 @@ local function runTimedCommandGroup(rest, assigns, saved, savedNames, getenv)
             debug.traceback
         )
 
-        if stdin then
-            stdin:close()
+        local closedSet = {}
+        local safelyClose = function(stream)
+            if stream and not closedSet[stream] then
+                closedSet[stream] = true
+                pcall(function() stream:close() end)
+            end
         end
-        if stdout then
-            stdout:close()
-        end
-        if stderr then
-            stderr:close()
-        end
+        safelyClose(stdin)
+        safelyClose(stdout)
+        safelyClose(stderr)
 
         if not ok then
             writeRed(process.error(), tostring(builtinErr), "\n")
@@ -2425,16 +3545,21 @@ local function runTimedCommandGroup(rest, assigns, saved, savedNames, getenv)
 end
 
 -- Everything but && and ;
-local function runCommandGroup(words, getenv)
+local function runCommandGroupInner(words, getenv)
     local assigns, rest = splitAssignments(words)
 
     if #assigns > 0 and #rest == 0 then
         local status = 0
         for _, a in ipairs(assigns) do
             local value, _, subStatus = expandToken(a.value, getenv)
-            st().locals[a.name] = value
-            if subStatus ~= nil then
-                status = subStatus
+            if st().readonlys[a.name] then
+                wasReadonly(a.name)
+                status = 1
+            else
+                st().locals[a.name] = value
+                if subStatus ~= nil then
+                    status = subStatus
+                end
             end
         end
         st().lastExitCode = status
@@ -2447,9 +3572,14 @@ local function runCommandGroup(words, getenv)
         saved = {}
         savedNames = {}
         for _, a in ipairs(assigns) do
-            saved[a.name] = st().locals[a.name]
-            savedNames[#savedNames + 1] = a.name
-            st().locals[a.name] = expandToken(a.value, getenv)
+            if st().readonlys[a.name] then
+                -- Frozen. The command still runs, just without the temp copy
+                wasReadonly(a.name)
+            else
+                saved[a.name] = st().locals[a.name]
+                savedNames[#savedNames + 1] = a.name
+                st().locals[a.name] = expandToken(a.value, getenv)
+            end
         end
         words = rest
     end
@@ -2511,6 +3641,7 @@ local function runCommandGroup(words, getenv)
                 writeRed(process.error(), "ksh: syntax error: " .. err, "\n")
                 st().lastExitCode = 2
             end
+            if isRunningScript() then fatalScriptError = true end
             restoreLocals()
             return
         end
@@ -2546,15 +3677,16 @@ local function runCommandGroup(words, getenv)
         )
 
         -- Cleanup time
-        if stdin then
-            stdin:close()
+        local closedSet = {}
+        local safelyClose = function(stream)
+            if stream and not closedSet[stream] then
+                closedSet[stream] = true
+                pcall(function() stream:close() end)
+            end
         end
-        if stdout then
-            stdout:close()
-        end
-        if stderr then
-            stderr:close()
-        end
+        safelyClose(stdin)
+        safelyClose(stdout)
+        safelyClose(stderr)
 
         if not ok then
             writeRed(process.error(), tostring(builtinErr), "\n")
@@ -2569,12 +3701,46 @@ local function runCommandGroup(words, getenv)
     restoreLocals()
 end
 
+-- Group time
+local function runCommandGroup(words, getenv)
+    local negate = false
+    while #words > 0 and words[1] == "!" do
+        negate = not negate
+        table.remove(words, 1)
+    end
+    if #words == 0 then
+        if negate then
+            writeRed(process.error(), "ksh: syntax error near '!'", "\n")
+            st().lastExitCode = 2
+            return
+        end
+        return
+    end
+    runCommandGroupInner(words, getenv)
+    if negate then
+        st().lastExitCode = st().lastExitCode == 0 and 1 or 0
+    end
+end
+
 -- This is incredibly lazy but is for $( subshell ) syntax
 -- Turns out I got it wrong in mshell so il redo it here
 local function extractSubshells(tokens)
+    -- make a nest
+    local function joinToks(list)
+        local parts = {}
+        for _, v in ipairs(list) do
+            if type(v) == "table" and v.subshell then
+                parts[#parts + 1] = "( " .. joinToks(v.subshell) .. " )"
+            else
+                parts[#parts + 1] = tostring(v)
+            end
+        end
+        return table.concat(parts, " ")
+    end
     local function parseGroup(tokens, i, n, isSubshell, isArithmetic)
         local inner = {}
         local depth = 1
+        local extra = isArithmetic
         local j = i
 
         while j <= n do
@@ -2585,7 +3751,19 @@ local function extractSubshells(tokens)
                     inner[#inner + 1] = t
                 elseif t == ")" then
                     depth = depth - 1
-                    if depth == 0 then break end
+                    if depth == 0 then
+                        if extra then
+                            local nx = tokens[j + 1]
+                            if type(nx) == "string" and not tokenIsQuoted(nx)
+                                and nx == ")" then
+                                j = j + 1
+                                extra = false
+                                break
+                            end
+                            return nil, "missing )", j
+                        end
+                        break
+                    end
                     inner[#inner + 1] = t
                 else
                     inner[#inner + 1] = t
@@ -2595,24 +3773,24 @@ local function extractSubshells(tokens)
             end
             j = j + 1
         end
+
         if depth ~= 0 then
             return nil, "missing )", j
         end
+
         if isSubshell then
             if #inner == 0 then
                 return nil, "syntax error: empty ( list )", j
             end
             return { subshell = inner }, nil, j + 1
         elseif isArithmetic then
-            -- $((...))
-            local processed, err = extractSubshells(inner)
-            if not processed then return nil, err, j end
-            return "$((" .. table.concat(processed, " ") .. "))", nil, j + 1
+            -- math
+            return "$((" .. joinToks(inner) .. "))", nil, j + 1
         else
             -- $(...)
             local processed, err = extractSubshells(inner)
             if not processed then return nil, err, j end
-            return "$(" .. table.concat(processed, " ") .. ")", nil, j + 1
+            return "$(" .. joinToks(processed) .. ")", nil, j + 1
         end
     end
 
@@ -2645,33 +3823,59 @@ end
 
 -- Chains hopefully dont barrel through anymore
 local function runAndList(tokens, getenv)
-    -- Now we have ||
-    local orGroups = splitTokensOn(tokens, "||")
-    for oi, orGroup in ipairs(orGroups) do
-        if #orGroup == 0 then
-            writeRed(process.error(), "ksh: syntax error near '||'", "\n")
-            st().lastExitCode = 2
-            return
-        end
+    local seq = {}
+    local cur = {}
 
-        local andGroups = splitTokensOn(orGroup, "&&")
-        local andResult = true
-        for _, andGroup in ipairs(andGroups) do
-            if #andGroup == 0 then
-                writeRed(process.error(), "ksh: syntax error near '&&'", "\n")
+    local function flushGroup()
+        seq[#seq + 1] = { group = cur }
+        cur = {}
+    end
+
+    for _, tok in ipairs(tokens) do
+        if tok == "&&" or tok == "||" then
+            if #cur == 0 then
+                writeRed(process.error(), "ksh: syntax error near '" .. tok .. "'", "\n")
                 st().lastExitCode = 2
                 return
             end
-            runCommandGroup(andGroup, getenv)
-            if st().lastExitCode ~= 0 then
-                andResult = false
-                break
+            flushGroup()
+            seq[#seq + 1] = { op = tok }
+        else
+            cur[#cur + 1] = tok
+        end
+    end
+
+    if #cur == 0 and #seq > 0 then
+        writeRed(process.error(), "ksh: syntax error near '" .. seq[#seq].op .. "'", "\n")
+        st().lastExitCode = 2
+        return
+    end
+    if #cur > 0 then
+        flushGroup()
+    end
+
+    if #seq == 1 then
+        runCommandGroup(seq[1].group, getenv)
+        return
+    end
+
+    -- No lastpipe option for you, go away
+    local lastStatus = nil
+    for i = 1, #seq, 2 do
+        local grp = seq[i].group
+        local skip = false
+        if lastStatus ~= nil then
+            local opv = seq[i - 1].op
+            if opv == "&&" and lastStatus ~= 0 then
+                skip = true
+            elseif opv == "||" and lastStatus == 0 then
+                skip = true
             end
         end
-        if andResult then
-            return
+        if not skip then
+            runCommandGroup(grp, getenv)
+            lastStatus = st().lastExitCode
         end
-        -- keep going
     end
 end
 
@@ -2681,6 +3885,7 @@ executeTokens = function(rawTokens, getenv)
     if not tokens then
         writeRed(process.error(), "ksh: syntax error: " .. tostring(err), "\n")
         st().lastExitCode = 2
+        if isRunningScript() then fatalScriptError = true end
         return
     end
 
@@ -2688,6 +3893,7 @@ executeTokens = function(rawTokens, getenv)
     if not tokens then
         writeRed(process.error(), "ksh: syntax error: " .. tostring(err), "\n")
         st().lastExitCode = 2
+        if isRunningScript() then fatalScriptError = true end
         return
     end
 
@@ -2710,6 +3916,7 @@ executeTokens = function(rawTokens, getenv)
             cur[#cur + 1] = tok
         end
     end
+
     if #cur > 0 then
         parts[#parts + 1] = cur
         terms[#parts] = nil
@@ -2733,6 +3940,7 @@ local function executeLine(line, getenv)
     if not tokens then
         writeRed(process.error(), "ksh: syntax error: " .. tostring(err), "\n")
         st().lastExitCode = 2
+        if isRunningScript() then fatalScriptError = true end
         return
     end
     if #tokens == 0 then return end
@@ -2748,17 +3956,20 @@ local function sourceFile(path, getenv)
         writeRed(process.error(), "ksh: " .. ioErr("is a directory", path), "\n")
         return
     end
+
     local f, reason = io.open(full, "r")
     if not f then
         writeRed(process.error(), "ksh: " .. ioErr(reason, path), "\n")
         return
     end
+
     local buf = {}
     while true do
         local chunk = f:read(math.huge)
         if not chunk then break end
         buf[#buf + 1] = chunk
     end
+
     f:close()
     for line in table.concat(buf):gmatch("[^\n]+") do
         executeLine(line, getenv)
@@ -2771,30 +3982,37 @@ runScriptLines = function(full, getenv)
     if not f then
         error(ioErr(reason, full), 0)
     end
+
     local buf = {}
     while true do
         local chunk = f:read(math.huge)
         if not chunk then break end
         buf[#buf + 1] = chunk
     end
+
     f:close()
     for line in table.concat(buf):gmatch("[^\n]+") do
+        if fatalScriptError then break end
         executeLine(line, getenv)
     end
+
     return st().lastExitCode
 end
 
 -- Run and go die
 local function runScript(path, getenv)
+    fatalScriptError = false
     local full = resolvePath(st().currPath, path)
     if not filesystem.exists(full) then
         writeRed(process.error(), "ksh: " .. ioErr("no such file or directory", path), "\n")
         process.exit(1)
     end
+
     if filesystem.isDirectory(full) then
         writeRed(process.error(), "ksh: " .. ioErr("is a directory", path), "\n")
         process.exit(1)
     end
+
     runScriptLines(full, getenv)
     process.exit(st().lastExitCode)
 end
@@ -2806,6 +4024,8 @@ builtins["sh"] = function(args, stdin, stdout, stderr)
         st().lastExitCode = 1
         return
     end
+    fatalScriptError = false
+
     st().lastExitCode = runScriptSubshell(args[1], args)
 end
 

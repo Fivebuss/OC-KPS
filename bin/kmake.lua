@@ -49,12 +49,8 @@ end
 
 local function runGc()
     if doGc == true then
-        local max = 0
-        max = math.max(max, computer.freeMemory())
-
-        for _ = 1, 40 do
-            max = math.max(max, computer.freeMemory())
-            event.pull(0)
+        for _ = 1, 10 do
+            computer.pullSignal(0)
         end
     end
 end
