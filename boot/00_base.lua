@@ -119,16 +119,12 @@ function os.execute(path, opts)
 end
 
 -- This is incredibly bad
-local janklink = false
-if filesystem.exists("usr") and janklink then
-    for file in filesystem.list("/usr/etc") do
-        local name = file:gsub("/$", "")
-        filesystem.link("/usr/etc/" .. name, "/etc/" .. name)
-    end
+if filesystem.isDirectory("/usr/etc") then
+    for name in filesystem.list("/usr/etc") do
+        local source = "/usr/etc/" .. name:gsub("/$", "")
+        local target = "/etc/" .. name:gsub("/$", "")
 
-    for file in filesystem.list("/usr/etc/services") do
-        local name = file:gsub("/$", "")
-        filesystem.link("/usr/etc/services/" .. name, "/etc/services/" .. name)
+        filesystem.link(source, target)
     end
 end
 

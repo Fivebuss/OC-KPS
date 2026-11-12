@@ -1635,6 +1635,25 @@ builtins["pwd"] = function(args, stdin, stdout, stderr)
     st().lastExitCode = 0
 end
 
+-- I just support luas. Who cares about security when you can just run it as code...
+builtins["date"] = function(args, stdin, stdout, stderr)
+    if #args == 0 then
+        stdout:write(os.date("%a %b %d %I:%M:%S %p" .. " IGST " .. "%Y"), "\n")
+    else
+        args[1] = args[1]:gsub("^+", "")
+        local ok, result = pcall(os.date, args[1], args[2] and tonumber(args[2]))
+        if not ok then
+            stderr:write("ksh: date: " .. tostring(result) .. "\n")
+            st().lastExitCode = 1
+            return
+        end
+
+        stdout:write(result, "\n")
+    end
+
+    st().lastExitCode = 0
+end
+
 -- hey local variable, congratulations on migrating
 builtins["export"] = function(args, stdin, stdout, stderr)
     local env = polaris.env.current()

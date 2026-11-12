@@ -279,6 +279,14 @@ local function insertText(text)
 end
 
 local function splitLine()
+    if curLine == #buffer + 1 then
+        table.insert(buffer, "")
+        curLine = #buffer
+        curCol = 0
+        unsaved = true
+        dirty = true
+        return
+    end
     local ln = buffer[curLine]
     local len = UL(ln)
     local tail = (curCol < len) and US(ln, curCol + 1) or ""
@@ -293,6 +301,15 @@ local function splitLine()
 end
 
 local function backspace()
+    if curLine == #buffer + 1 then
+        if curLine > 1 then
+            curLine = curLine - 1
+            curCol = curLineLen()
+            dirty = true
+        end
+        
+        return
+    end
     local ln = buffer[curLine]
     local len = UL(ln)
 
@@ -627,12 +644,30 @@ local function processKey(key)
         dirty = true
     elseif char == 12 then -- ^L
         dirty = true
+    elseif char == 13 then -- enter
+        if curLine == #buffer + 1 then
+            -- appending a new line at end of file
+            table.insert(buffer, "")
+            curLine = #buffer
+            curCol = 0
+            unsaved = true
+            dirty = true
+        else
+            splitLine()
+        end
+    elseif char == 8 then -- backspace
+        if curLine == #buffer + 1 then
+            -- move up to end of previous line
+            if curLine > 1 then
+                curLine = curLine - 1
+                curCol = curLineLen()
+                dirty = true
+            end
+        else
+            backspace()
+        end
     elseif curLine > #buffer then
         return
-    elseif char == 13 then  -- enter
-        splitLine()
-    elseif char == 8 then   -- backspace
-        backspace()
     elseif char == 9 then   -- tab
         insertChar("  ")
     elseif char == 4 then   -- ^D delete forward
