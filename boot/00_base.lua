@@ -118,16 +118,6 @@ function os.execute(path, opts)
     end, opts)
 end
 
--- This is incredibly bad
-if filesystem.isDirectory("/usr/etc") then
-    for name in filesystem.list("/usr/etc") do
-        local source = "/usr/etc/" .. name:gsub("/$", "")
-        local target = "/etc/" .. name:gsub("/$", "")
-
-        filesystem.link(source, target)
-    end
-end
-
 -- mmmmmm syscalls
 
 local function unmountAll()
@@ -185,3 +175,9 @@ polaris.sysrq.register(117, function()
         polaris.log("Failed ummountall(): " .. reason)
     end
 end)
+
+-- Services
+local ok, err = xpcall(function() polaris.services.boot() end, debug.traceback)
+if not ok then
+    polaris.log("services: boot failed: " .. tostring(err))
+end

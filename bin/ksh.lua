@@ -432,9 +432,7 @@ local function expandToken(w, getenv, keepMarkers)
             end
 
             if rec then
-                local atSegmentStart = (cur.kind == "raw" and #cur.txt == 0)
-                local isConcat = (lastClosedQuote == rec[1] and cur.kind == "raw")
-                if top or depth > 0 or (not atSegmentStart and not isConcat) then
+                if top or depth > 0 then
                     cur.txt = cur.txt .. char
                 else
                     flush()
@@ -737,8 +735,9 @@ local function parseSegment(words, getenv)
                             shielded[#shielded + 1] = ch
                         end
                     end
+                    -- quotes continue to bug me
                     for _, m in ipairs(expandWildcard(table.concat(shielded))) do
-                        out[#out + 1] = (m:gsub("\001", ""))
+                        out[#out + 1] = (m:gsub("\001", ""):gsub("[\001\002\003\004\005\006\007]", ""))
                     end
                 else
                     field = (field:gsub("[\001\002\003\004\005\006\007]", ""))
@@ -1844,7 +1843,7 @@ builtins["alias"] = function(args, stdin, stdout, stderr)
     end
 
     for _, arg in ipairs(args) do
-        local name, val = arg:match("^([%w_%-]+)=(.*)$")
+        local name, val = arg:match("^([%w_%.%-]+)=(.*)$")
         if name then
             st().aliases[name] = stripQuotes(val)
         else
@@ -2201,7 +2200,9 @@ local function splitAssignments(words)
     local i = 1
     while words[i] do
         if type(words[i]) ~= "string" then break end
-        local name, value = stripQuotes(words[i]):match("^([%a_][%w_]*)=(.*)$")
+        local word = stripQuotes(words[i])
+        local name, value = word:match("^([%a_][%w_]*)=(.*)$")
+        if name then value = stripQuotes(value) end
         if not name then break end
         -- Cheap
         if value == "" and type(words[i + 1]) == "string"

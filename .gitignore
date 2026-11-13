@@ -6,3 +6,4 @@ ref/
 !/home/root/
 /home/root/*
 !/home/root/.commitfile
+/sys/log

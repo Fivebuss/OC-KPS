@@ -167,7 +167,6 @@ local function newFileStream(path, mode)
 end
 
 io.newFileStream = newFileStream
-io.open = newFileStream -- Somehow this works a month later. Interesting
 
 -- Descriptor of buffered stream, no you cannot steal other fd's
 function io.open(path, mode)

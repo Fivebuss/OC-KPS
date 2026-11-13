@@ -86,7 +86,7 @@ local function isKernel()
     if not kpid then return end
 
     table_[kpid] = {
-        ppid = "bootloader",
+        ppid = 0,
         cmd = "kernel",
         uid = KERNEL_UID,
         gid = process.GID.SVC,

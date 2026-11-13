@@ -144,7 +144,6 @@ if polaris.config and polaris.config["debug"] ~= true then _G.status = nil end
 
 local event_internals =
     require("event_internals")
-
 while true do
     event_internals.pullSignal()
 end
