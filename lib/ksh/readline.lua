@@ -201,6 +201,7 @@ function readline:read(skipPromptDraw)
 
 	function disc.onKeyDown(_, _, char, code)
 		if done then return true end
+		if session.attributes.xoff then return true end
 
 		-- Backspace
 		if char == 8 then
@@ -209,7 +210,9 @@ function readline:read(skipPromptDraw)
 				pos = pos - 1
 				resetHistoryNavigation()
 				if pos == #buf then
-					session:write_str("\27[D \27[D")
+					if session.attributes.echo then
+						session:write_str("\27[D \27[D")
+					end
 					curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
 				else
 					redrawLine()
@@ -322,7 +325,9 @@ function readline:read(skipPromptDraw)
 		resetHistoryNavigation()
 
 		if pos == #buf then
-			session:write_str(ch)
+			if session.attributes.echo then
+				session:write_str(ch)
+			end
 			curRelRow, curRelCol = relPos(promptW + displayWidth(table.concat(buf, "", 1, pos)))
 		else
 			redrawLine()

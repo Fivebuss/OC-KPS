@@ -15,6 +15,7 @@
 * A real sleep that is not the busy-wait polling nonsense like openOS does. It just suspends a coroutine and tell's scheduler to wake it upz
 * Each process get's their own _ENV but it's easily manageable
 * devfs + procfs are different than openOS (and actually exist for the latter)
+* because of how pullSignal works, the actual lua GC runs *every few centuries* by itself
 * neat name
 
 ### Userspace
@@ -28,9 +29,10 @@
   * Exit codes
   * An actual shell pipeline that isn't sequential
   * env variables are distinguished between the expected kinds
-  * Special variable support ($$)
+  * *Most* of special variable support (like $?)
   * Basic shell scripting
-  * Multi-user
+  * Multi-user (it wont mystically crash the system, looking at you openOS with globals)
+  * Job control. Yup. It exists sorta like sh does. Expect bugs, this is the most untested
   * A majority of builtins
   * CTRL D is real. Yes, it functions like bash. I hope. Most arduous part of this project believe it or not...
 * Readline
@@ -40,8 +42,8 @@
     * Home/End
     * CTRL A/E
     * CTRL L
-    * (Half broken) multi-line support
-  * Usable all over with little difficulty (It's a convuluted library)
+  * Usable all over with little difficulty (It's a pretty portable library)
+  * (Half broken) multi-line support
 * Coreutils:
   * Most i/o tools (cat, tee, head, wc, tail, even printf*)
   * A lua shell somewhat similiar to openOS's
@@ -56,7 +58,7 @@
   * a tar archiver and unarchiver. It's pretty neat, thanks mpmxyz
   * Some system-specific tools
   * Other misc things that aren't worth mentioning
-* Alot of ram use. Seriously, alot. ~460k idle for one GPU lmao and boots needing ~480k
+* Alot of ram use. Seriously, alot. ~490k idle for one GPU lmao and boots needing ~512k
 
 #### Main libraries
 * event: openOS style but with changes, specifically they arrive now upon a scheduler tick
@@ -89,12 +91,11 @@ You may want to remove the README and other documents at /, they are quite large
 ## Roadmap
 Mostly just finishing aformentioned gaps but here:
 * Shell scripting part 2 (Right now it doesnt support stuff like if/fi)
-* Some kind of virtual console system, PTS/PTY is too complex to bother with though
 * Installer + Release system
+* Some kind of virtual console system, PTS/PTY is too complex to bother with though
 * tar package system for optional things, notably networking and multi-gpu as the mgpu driver (only one right now) is very slow due to OC component call times
-* Ksh jobs and backgrounding, just need to do the shell-side of it
 * bugfix everything I can find
-* Optimization. Zero done yet really except boot times and major ram savings
+* Optimization. Very little done so for the ram side (490k is outrageous)
 * **Actual release** and make documentation
 
 ## Lets talk security

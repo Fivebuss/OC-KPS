@@ -27,8 +27,6 @@ local tty = polaris.console.openTTY({
 
 tty:setCursorShape("underline")
 
--- For later
-tty.disabled.Z = true
 
 --polaris.config["tty.profile"] = 7
 
@@ -127,11 +125,15 @@ local shellState = {
     readonlys = {},
     currPath = "/",
     lastExitCode = 0,
-    fgBusy = false,       -- true while a foreground pipeline is actually going
-    gid = process.GID.FG, -- No jobs yet.
-    asyncJobs = {},       -- wait
+    fgBusy = false,    -- true while a foreground pipeline is actually going
+    gid = process.GID.FG,
+    asyncJobs = {},    -- wait
+    currJob = nil,     -- yes this counts pipes
+    fgStopped = false, -- CTRL Z
     shellStartTime = computer.uptime(),
 }
+
+local nextJobId = 1
 
 local function st()
     return shellStates[process.activeThread()] or shellState
@@ -153,7 +155,6 @@ local function wasReadonly(name)
     writeRed(process.error(), "ksh: " .. name .. ": readonly variable", "\n")
 end
 
-
 -- This is cursed, il pull a mshell
 local captureSubshell, spawnSubshell, executeTokens, runScriptLines
 local snapshotState
@@ -169,6 +170,27 @@ tty.onSignal = function(_, sig)
     if shellUid then
         process.signalGroup(shellUid, process.GID.FG, sig)
     end
+    -- Deal with jobs
+    if shellState.fgBusy and shellState.currJob and shellState.currJob.pid then
+        local job = shellState.currJob
+        local sent = { [job.pid] = true }
+        if process.exists(job.pid) then
+            process.signal(job.pid, sig)
+        end
+
+        for _, mp in ipairs(job.members or {}) do
+            if not sent[mp] and process.exists(mp) then
+                sent[mp] = true
+                process.signal(mp, sig)
+            end
+        end
+    end
+    -- CTRL Z
+    if sig == "TSTP" and shellState.fgBusy then
+        shellState.fgStopped = true
+        process.send(shellPid, true)
+    end
+
     if not shellState.fgBusy then
         drawPrompt()
         signalPrompt = true
@@ -324,6 +346,15 @@ local function simpleExpandVars(str, getenv, quoted)
         return zoneMark(lookupVar(body, getenv) or "", quoted)
     end)
     out = out:gsub("%$%?", function() return zoneMark(tostring(st().lastExitCode), quoted) end)
+    out = out:gsub("%$!", function()
+        local jobs = st().asyncJobs
+        for i = #jobs, 1, -1 do
+            if jobs[i].pid then
+                return zoneMark(tostring(jobs[i].pid), quoted)
+            end
+        end
+        return zoneMark("0", quoted)
+    end)
     out = out:gsub("%$%$", function() return zoneMark(tostring(shellPid or 0), quoted) end)
     out = out:gsub("%$([%d]+)", function(num)
         return zoneMark(lookupVar(num, getenv) or "", quoted)
@@ -1083,6 +1114,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
     local waiterPid = process.self().pid
     local spawnedAny = false
     local pids = {}
+    local jobRef -- the tracked foreground job; survives runPipeline returning
 
     local spawnPwd = st().currPath
     local spawnGid = st().gid
@@ -1098,7 +1130,8 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
     local function segmentDone(segIdx, exitCode, inPipe, outPipe)
         if outPipe then outPipe:close() end
         if inPipe then inPipe:closeRead() end
-        results[segIdx] = exitCode
+        local bySignal = exitCode == "cancelled" or exitCode == "killed"
+        results[segIdx] = bySignal and 130 or exitCode
         remaining = remaining - 1
         if remaining <= 0 then
             detachAll()
@@ -1106,6 +1139,13 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
             if spawnedAny then
                 process.send(waiterPid, true)
             end
+        end
+
+        if jobRef and segIdx == segCount then
+            jobRef.done = true
+            jobRef.status = results[segIdx]
+            jobRef.terminatedBySignal = bySignal
+            process.send(waiterPid, true)
         end
     end
 
@@ -1168,8 +1208,15 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         cmd = "( subshell )",
                         label = "( subshell )",
                         onExit = function(success, exitCode)
-                            local code = (type(exitCode) == "number") and exitCode
-                                or (success and 0 or 1)
+                            local code
+                            if type(exitCode) == "number" then
+                                code = exitCode
+                            elseif exitCode == "cancelled" or exitCode == "killed" then
+                                code = "cancelled"
+                            else
+                                code = success and 0 or 1
+                            end
+
                             segmentDone(segIdx, code, inPipe, outPipe)
                         end,
                     })
@@ -1252,7 +1299,14 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                             -- Go away fd table
                             process.destroy(pid)
                             shellStates[pid] = nil
-                            local code = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
+                            local code
+                            if type(exitCode) == "number" then
+                                code = exitCode
+                            elseif exitCode == "cancelled" or exitCode == "killed" then
+                                code = "cancelled"
+                            else
+                                code = success and 0 or 1
+                            end
                             segmentDone(segIdx, code, inPipe, outPipe)
                         end,
                     })
@@ -1310,17 +1364,88 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
         end
     end
 
+    -- Yeah the whole pipeline is a job. Jank I know but it weirdly works not bad
+    if spawnedAny then
+        local cmdLabel = ""
+        for i = 1, segCount do
+            if i > 1 then cmdLabel = cmdLabel .. " | " end
+            local seg = parsedSegments[i]
+            if seg.args then
+                cmdLabel = cmdLabel .. table.concat(seg.args, " ")
+            elseif seg.subshell then
+                cmdLabel = cmdLabel .. "( subshell )"
+            elseif seg.braceGroup then
+                cmdLabel = cmdLabel .. "{ ... }"
+            else
+                cmdLabel = cmdLabel .. "?"
+            end
+        end
+
+        local jobid = nextJobId
+        nextJobId = jobid + 1
+        st().currJob = {
+            pid = pids[1],
+            jobid = jobid,
+            done = false,
+            status = 0,
+            cmd = cmdLabel,
+            reported = false,
+            fg = true,
+            members = pids,
+            terminatedBySignal = false,
+            stopped = false,
+            stopNotified = false,
+        }
+        jobRef = st().currJob
+        st().asyncJobs[#st().asyncJobs + 1] = st().currJob
+        -- Background subshells
+        local members = st().memberTable
+        if members then
+            for _, p in ipairs(pids) do
+                members[#members + 1] = p
+            end
+        end
+    end
+
     -- Deal with this weirdness
     if spawnedAny and remaining > 0 then
         st().fgBusy = true
         -- Yes, I loop here because multiple SIGCHLDs can arrive. Lazy I know. no, I will not queue signals as promised. Go away
         while remaining > 0 do
             process.waitForInput()
+            if st().fgStopped then break end
         end
+    end
+
+    if spawnedAny then
+        detachAll()
         st().fgBusy = false
+        local wasStopped = st().fgStopped
+        st().fgStopped = false
         tty:flush()
-        if tty.cx > 1 then
+        -- Arrgghh double draw
+        if st().gid ~= process.GID.BG and tty.cx > 1 then
             tty:write("\n")
+        end
+
+        if st().currJob then
+            if wasStopped then
+                st().currJob.stopped = true
+                st().currJob.done = false
+            else
+                st().currJob.done = true
+                local rc = results[segCount]
+                if type(rc) == "number" then st().currJob.status = rc end
+                if st().currJob.status == 0 then
+                    st().currJob.reported = true
+                end
+                -- Nest kill
+                if st().memberTable and st().currJob.terminatedBySignal then
+                    st().memberTable.terminatedBySignal = true
+                end
+
+                st().currJob = nil
+            end
         end
     end
 
@@ -1342,6 +1467,8 @@ snapshotState = function(gid)
         fgBusy = false,
         gid = gid or s.gid,
         asyncJobs = {},
+        currJob = nil,
+        fgStopped = false,
         shellStartTime = s.shellStartTime,
     }
     return copy
@@ -1353,6 +1480,10 @@ spawnSubshell = function(tokens, opts)
     local state = snapshotState(opts.gid)
     if opts.scriptArgs ~= nil then
         state.scriptArgs = opts.scriptArgs
+    end
+    if opts.memberTable then
+        -- Background subshells? I think I got it right
+        state.memberTable = opts.memberTable
     end
 
     local tempEnv = opts.tempEnv
@@ -1439,22 +1570,149 @@ captureSubshell = function(tokens, getenv)
     return table.concat(chunks), status
 end
 
--- Runs something in background, this is not finished!
+local function formatCmd(tokens)
+    local parts = {}
+    for _, v in ipairs(tokens) do
+        if type(v) == "table" and v.subshell then
+            parts[#parts + 1] = "( " .. formatCmd(v.subshell) .. " )"
+        else
+            parts[#parts + 1] = tostring(v)
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+-- Just the basics
+local function jobStatusText(job)
+    if job.done then
+        if job.terminatedBySignal or job.status == 130 then return "Terminated" end
+        if job.status == 0 then return "Done" end
+        return "Done (" .. tostring(job.status) .. ")"
+    end
+    if job.stopped then return "Stopped" end
+    if job.pid and process.exists(job.pid) and process.isStopped(job.pid) then
+        return "Stopped"
+    end
+    return "Running"
+end
+
+-- Deals with jobs
+local function resolveJob(spec)
+    if type(spec) ~= "string" then return nil end
+    local jobs = st().asyncJobs
+    local first = spec:sub(1, 1)
+    if first == "%" then
+        local rest = spec:sub(2)
+        if rest == "" or rest == "+" then
+            -- recent
+            for i = #jobs, 1, -1 do
+                if not jobs[i].done then return jobs[i] end
+            end
+            for i = #jobs, 1, -1 do return jobs[i] end
+            return nil, "no such job"
+        elseif rest == "-" then
+            -- previous
+            local found = 0
+            for i = #jobs, 1, -1 do
+                found = found + 1
+                if found == 2 then return jobs[i] end
+            end
+
+            return nil, "no such job"
+        else
+            local n = tonumber(rest)
+            if not n then return nil, "invalid job spec: " .. spec end
+            for _, job in ipairs(jobs) do
+                if job.jobid == n then return job end
+            end
+
+            return nil, "no such job: " .. spec
+        end
+    else
+        local pid = tonumber(spec)
+        if not pid then return nil, "invalid job spec: " .. spec end
+        for _, job in ipairs(jobs) do
+            if job.pid == pid then return job end
+        end
+
+        return nil, "no such job: " .. spec
+    end
+end
+
+-- SIGTTIN Cat dont read please
+local function bgTtyStdin(job)
+    local real = ownStdin()
+    local stoppedPids = job.stoppedPids
+
+    local function checkRead()
+        if job.fg or job.done then return end
+        job.stopped = true
+        job.stopNotified = false
+        local selfPid = process.self().pid
+        if not stoppedPids[selfPid] then
+            stoppedPids[selfPid] = true
+            stoppedPids[#stoppedPids + 1] = selfPid
+        end
+        process.stop(selfPid)
+        process.yield() -- finally a use for this. I actually thought ahead
+        if not job.fg and not job.done then
+            checkRead()
+        end
+    end
+
+    return {
+        read = function(_, ...)
+            checkRead()
+            return real:read(...)
+        end,
+        readLine = function(_, ...)
+            checkRead()
+            return real:readLine(...)
+        end,
+        close = function() end,
+    }
+end
+
+-- This is beyond broken.
+-- But its a cheap way to do this. I have coroutines for a reason
 local function runAsync(tokens, getenv)
     local spawnerPid = process.activeThread()
-    local job = { pid = nil, done = false, status = 0 }
+    local jobid = nextJobId
+    nextJobId = jobid + 1
+    local job = {
+        pid = nil,
+        jobid = jobid,
+        done = false,
+        status = 0,
+        cmd = formatCmd(tokens),
+        reported = false,
+        terminatedBySignal = false,
+        stopped = false,
+        fg = false,
+        members = {}, -- background subshell stuff
+        stoppedPids = {},
+    }
     job.pid = spawnSubshell(tokens, {
         gid = process.GID.BG,
-        stdin = io.newStream(),
-        cmd = "async list",
-        label = "async list",
+        stdin = bgTtyStdin(job),
+        cmd = "/bin/ksh.lua",
+        label = "ksh-async-executor",
+        memberTable = job.members,
         onExit = function(success, exitCode)
             job.done = true
-            job.status = (type(exitCode) == "number") and exitCode or (success and 0 or 1)
+            if type(exitCode) == "number" then
+                job.status = exitCode
+            else
+                job.terminatedBySignal = true
+                job.status = 130
+            end
             -- Wake a pending wait
             process.send(spawnerPid, true)
         end,
     })
+    -- Stay out my stdout
+    tty:write("[" .. jobid .. "] " .. job.pid .. "\n")
+    if tty.flush then tty:flush() end
     local jobs = st().asyncJobs
     jobs[#jobs + 1] = job
     st().lastExitCode = 0
@@ -2013,10 +2271,41 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             sigNum = n
             sig = process.SIG[n]
         elseif a:sub(1, 1) == "%" then
-            -- jobs for when I get around to it
-            stderr:write("kill: Jobs not implemented\n")
-            st().lastExitCode = 1
-            return
+            -- jobs %1 %% %+ %-
+            local job, err = resolveJob(a)
+            if not job then
+                stderr:write("kill: " .. tostring(err) .. "\n")
+                st().lastExitCode = 1
+                return
+            end
+
+            if job.done then
+                -- The process is already gone
+                stderr:write("kill: " .. a .. ": job has already finished\n")
+                local jobList = st().asyncJobs
+                for i = #jobList, 1, -1 do
+                    if jobList[i] == job then
+                        table.remove(jobList, i)
+                        break
+                    end
+                end
+
+                st().lastExitCode = 1
+                return
+            end
+
+            local seen = {}
+            if job.pid then
+                seen[job.pid] = true
+                targets[#targets + 1] = tostring(job.pid)
+            end
+
+            for _, mp in ipairs(job.members or {}) do
+                if not seen[mp] then
+                    seen[mp] = true
+                    targets[#targets + 1] = tostring(mp)
+                end
+            end
         else
             targets[#targets + 1] = a
         end
@@ -2175,20 +2464,114 @@ builtins["wait"] = function(args, stdin, stdout, stderr)
     end
 
     for _, arg in ipairs(args) do
-        local pid = tonumber(arg)
-        local job
-        for _, j in ipairs(jobs) do
-            if j.pid == pid then
-                job = j
-                break
-            end
-        end
+        local job, err = resolveJob(arg)
         if not job then
-            stderr:write("ksh: wait: " .. tostring(arg) .. ": not an async job of this shell\n")
+            stderr:write("ksh: wait: " .. tostring(arg) .. ": " .. tostring(err or "not an async job") .. "\n")
             st().lastExitCode = 127
         else
             st().lastExitCode = waitJob(job)
         end
+    end
+end
+
+-- Oh boy! It exists!
+builtins["jobs"] = function(args, stdin, stdout, stderr)
+    local jobs = st().asyncJobs
+    local any = false
+    for i = #jobs, 1, -1 do
+        local job = jobs[i]
+        if job.done and not job.reported then
+            stdout:write("[" .. job.jobid .. "] " .. jobStatusText(job) .. " "
+                .. tostring(job.pid) .. " " .. job.cmd .. "\n")
+            job.reported = true
+            table.remove(jobs, i)
+            any = true
+        elseif not job.done then
+            stdout:write("[" .. job.jobid .. "] " .. jobStatusText(job) .. " "
+                .. tostring(job.pid) .. " " .. job.cmd .. "\n")
+            any = true
+        else
+            table.remove(jobs, i) -- go away
+        end
+    end
+
+    if any and stdout.flush then stdout:flush() end
+    st().lastExitCode = 0
+end
+
+-- This gives me headaches
+builtins["bg"] = function(args, stdin, stdout, stderr)
+    local spec = args[1] or "%"
+    local job, err = resolveJob(spec)
+    if not job then
+        stderr:write("bg: " .. tostring(spec) .. ": " .. tostring(err or "no such job") .. "\n")
+        st().lastExitCode = 1
+        return
+    end
+
+    job.stopped = false
+    job.stopNotified = false
+    if job.pid and process.exists(job.pid) and process.isStopped(job.pid) then
+        process.cont(job.pid)
+    end
+
+    for _, mp in ipairs(job.members or {}) do
+        if mp ~= job.pid and process.exists(mp) and process.isStopped(mp) then
+            process.cont(mp)
+        end
+    end
+
+    st().lastExitCode = 0
+end
+
+-- Hey, come back!
+builtins["fg"] = function(args, stdin, stdout, stderr)
+    local spec = args[1] or "%"
+    local job, err = resolveJob(spec)
+    if not job then
+        stderr:write("fg: " .. tostring(spec) .. ": " .. tostring(err or "no such job") .. "\n")
+        st().lastExitCode = 1
+        return
+    end
+    if job.done then
+        st().lastExitCode = job.status
+        return
+    end
+    -- SIGTTIN is first
+    job.fg = true
+    job.stopped = false
+    job.stopNotified = false
+    if job.pid and process.exists(job.pid) and process.isStopped(job.pid) then
+        process.cont(job.pid)
+    end
+
+    for _, mp in ipairs(job.members or {}) do
+        if mp ~= job.pid and process.exists(mp) and process.isStopped(mp) then
+            process.cont(mp)
+        end
+    end
+
+    shellState.currJob = job
+    st().fgBusy = true
+    -- Weird CTRL+Z fix. I think its no longer necessary since I fixed cont tho
+    while process.exists(job.pid) do
+        process.waitForInput()
+        if st().fgStopped then break end
+    end
+
+    local stoppedByZ = st().fgStopped
+    st().fgBusy = false
+    st().fgStopped = false
+    shellState.currJob = nil
+    job.fg = false
+    if stoppedByZ then
+        job.stopped = true
+    end
+
+    if job.done then
+        st().lastExitCode = job.status
+    else
+        st().lastExitCode = 0
     end
 end
 
@@ -2836,6 +3219,33 @@ local function shellLoop()
         -- Fix doubledraw?
         local promptDrawn = signalPrompt
         signalPrompt = false
+
+        -- What got done?
+        -- I can cheat and not feel bad
+        -- Funnily enough sh works this way in linux so I guess its all good
+        if not st().fgBusy then
+            local jobs = st().asyncJobs
+            for i = #jobs, 1, -1 do
+                local job = jobs[i]
+                if job.done then
+                    if not job.reported then
+                        if job.status ~= 0 or job.terminatedBySignal then
+                            job.reported = true
+                            tty:write("[" .. job.jobid .. "] " .. jobStatusText(job) .. " " .. job.cmd .. "\n")
+                            if tty.flush then tty:flush() end
+                            table.remove(jobs, i)
+                        end
+                    else
+                        table.remove(jobs, i)
+                    end
+                elseif job.stopped and not job.stopNotified then
+                    -- Sigtin?
+                    job.stopNotified = true
+                    tty:write("[" .. job.jobid .. "] " .. jobStatusText(job) .. " " .. job.cmd .. "\n")
+                    if tty.flush then tty:flush() end
+                end
+            end
+        end
 
         local line = lineEditor:read(promptDrawn)
 

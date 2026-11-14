@@ -246,6 +246,10 @@ function scheduler.signal(cid, sig, ...)
         -- Im so kind, I give it one more resume to deal with cleanup by default
         t.cancelled = true
         t.condemned = true
+        -- This is horrifcly jank but I dont have better ideas
+        if t.stopped then
+            return scheduler.kill(cid)
+        end
     end
     -- CHLD does nothing
 
@@ -417,7 +421,18 @@ function scheduler.cont(cid)
     if not t or not t.stopped then return false end
 
     t.stopped = false
-    t.pendingSignal = scheduler.SIG.CONT
+    t.pendingSignal = nil
+    t.signalArgs = nil
+
+    -- Fine il get to it. Wake up!
+    if t.waiting then
+        t.waiting = false
+        t.eventFilter = nil
+        t.eventDeadline = nil
+        t.resumeArgs = nil
+        t.hasResume = true
+        t.resumeVal = nil
+    end
 
     if t.sleepRemaining ~= nil then
         t.wakeAt = computer_uptime() + t.sleepRemaining

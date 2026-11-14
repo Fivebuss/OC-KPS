@@ -32,7 +32,6 @@ local function resetTty(t)
     t.attributes.cursor = true
     t.attributes.xoff = false
     t.disabled = {}
-    t.disabled.Z = true
     t:setResolution(t.gpu.maxResolution())
     t.gpu.setActiveBuffer(0)
     t:setCursor(true)
