@@ -1,7 +1,14 @@
 -- /sys/drivers/term/init.lua
 -- Terminal emulator essentially but it handles GPU stuff too
--- I split them because I plan for a pts/pty system soon and because its a good idea(?)
--- Most everything is just copy pasted from old tty
+-- I split them because it allows for a future virtual console thing to work wayyy better
+-- And it's generally a good idea
+-- Alot of code here is still based on OCawesome101's Cynosure TTY!
+
+--[[
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
+--]]
 
 local unicode = require("unicode")
 local computer = require("computer")
@@ -145,10 +152,11 @@ function commands.H(t, args)
     wrapCursor(t)
 end
 
+-- For the first time in forever, found a bug in cynosure's tty code
 function commands.J(t, args)
     local n = args[1] or 0
     if n == 0 then
-        t.gpu.fill(1, t.cy, t.w, t.h - t.cy, " ")
+        t.gpu.fill(1, t.cy, t.w, t.h - t.cy + 1, " ")
     elseif n == 1 then
         t.gpu.fill(1, 1, t.w, t.cy, " ")
     elseif n == 2 then

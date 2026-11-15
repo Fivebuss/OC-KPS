@@ -186,8 +186,19 @@ tty.onSignal = function(_, sig)
         end
     end
     -- CTRL Z
-    if sig == "TSTP" and shellState.fgBusy then
+    if sig == "TSTP" and shellState.fgBusy and shellState.currJob then
+        local job = shellState.currJob
+        if not job.jobid then
+            local jobid = nextJobId
+            nextJobId = jobid + 1
+            job.jobid = jobid
+            job.reported = false
+            job.fg = false
+            st().asyncJobs[#st().asyncJobs + 1] = job
+        end
         shellState.fgStopped = true
+        job.stopped = true
+        job.done = false
         process.send(shellPid, true)
     end
 
@@ -1364,7 +1375,6 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
         end
     end
 
-    -- Yeah the whole pipeline is a job. Jank I know but it weirdly works not bad
     if spawnedAny then
         local cmdLabel = ""
         for i = 1, segCount do
@@ -1381,23 +1391,17 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
             end
         end
 
-        local jobid = nextJobId
-        nextJobId = jobid + 1
         st().currJob = {
             pid = pids[1],
-            jobid = jobid,
             done = false,
             status = 0,
             cmd = cmdLabel,
-            reported = false,
             fg = true,
             members = pids,
             terminatedBySignal = false,
             stopped = false,
-            stopNotified = false,
         }
         jobRef = st().currJob
-        st().asyncJobs[#st().asyncJobs + 1] = st().currJob
         -- Background subshells
         local members = st().memberTable
         if members then

@@ -2,6 +2,8 @@
 ## Much of the entire OS is ported, used or at one point in time from openOS. I include the license here:
 
 ```
+The MIT License (MIT)
+
 Copyright (c) 2013-2015 Florian "Sangar" Nücke
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,9 +25,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Termio/readline is inspired and loosely based on Ocawesome101's cynosure and ulOS 1's systems
-It's license is hilariously open so I wont include it here. However the most egregious of my copying is at:
-``/sys/kernel/modules/tty.lua`` which is nearly a direct port only with some changes. Seriously, big thanks to Ocawesome101!
+### The TTY/Terminal stack uses alot of code from Cynosure 1 and ULOS 1's stuff, and the termio/readline system here were loosely based on the same projects as well
+``/sys/kernel/modules/tty.lua`` and ``/sys/drivers/term/init.lua`` uses the VT100 code with changes for performance and some bug fixes. Ocawesome101 kindly licensed it to me under MPL2, also the full MPL2 license is at the bottom of this file.
 
 ### /bin/tar.lua is a port of mpmxyz's tar program:
 ``https://github.com/mpmxyz/ocprograms/blob/master/home/bin/tar.lua``
@@ -105,7 +106,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### /usr/* is a susbstantial rewrite, port and general just update of AR2000AR's osnetwork:
+### /usr/* is a susbstantial rewrite, port and general just update of AR2000AR's osnetwork under MPL2
 
 ```
 Mozilla Public License Version 2.0

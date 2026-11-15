@@ -117,10 +117,18 @@ function readline:read(skipPromptDraw)
 	local resultLine = nil
 	local done = false
 
-	if not skipPromptDraw then
+	-- aaaaaaa screen scroll broke it. Fixed finally
+	local anchorRow, anchorCol
+	if skipPromptDraw then
+		anchorRow = session.tty.cy - (relPos(promptW) - 1)
+		anchorCol = 1
+	else
+		anchorRow = session.tty.cy
+		anchorCol = session.tty.cx
 		session:write_str(prompt)
 		if session.flush then session:flush() end
 	end
+
 	curRelRow, curRelCol = relPos(promptW)
 
 	local function redrawLine()
@@ -130,17 +138,16 @@ function readline:read(skipPromptDraw)
 		local contentW = promptW + prefixW
 		local targetRow, targetCol = relPos(contentW)
 
-		local out = { "\27[G" }
-		if curRelRow > 1 then
-			out[#out + 1] = "\27[" .. (curRelRow - 1) .. "A"
-		end
+		local out = { "\27[" .. anchorRow .. ";" .. anchorCol .. "H" }
 		out[#out + 1] = "\27[J"
 		out[#out + 1] = prompt
 		out[#out + 1] = line
 		if suffixW > 0 then
 			out[#out + 1] = "\27[" .. suffixW .. "D"
 		end
+		
 		session:write_str(table.concat(out))
+		anchorRow = session.tty.cy - (targetRow - 1)
 		curRelRow, curRelCol = targetRow, targetCol
 	end
 
@@ -291,6 +298,7 @@ function readline:read(skipPromptDraw)
 		if char == 12 then
 			session.tty:clear()
 			session:write_str(prompt)
+			anchorRow, anchorCol = 1, 1
 			curRelRow, curRelCol = relPos(promptW)
 			redrawLine()
 			return true
