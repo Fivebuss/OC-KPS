@@ -2,7 +2,6 @@
 local component = require("component")
 local event = require("event")
 local filesystem = require("filesystem")
-local process = require("process")
 
 local args = { ... }
 

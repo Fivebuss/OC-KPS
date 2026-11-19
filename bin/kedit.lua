@@ -14,8 +14,6 @@ local filesystem = require("filesystem")
 local unicode = require("unicode")
 local termio = require("termio")
 
-local process = polaris.process
-
 local UL, US = unicode.len, unicode.sub
 local sformat, tconcat = string.format, table.concat
 

@@ -2,7 +2,6 @@
 -- This is not a great solution
 
 local args = {...}
-local process = require("process")
 local users = require("users")
 
 local numeric = false

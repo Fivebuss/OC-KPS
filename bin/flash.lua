@@ -1,7 +1,6 @@
 -- /bin/flash.lua
 local getopt = require("ksh.getopt")
 local filesystem = require("filesystem")
-local process = polaris.process
 
 local quiet = false
 local printRomFlag = false

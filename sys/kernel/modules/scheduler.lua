@@ -11,6 +11,7 @@ Lsched
 Cooperative multitasking. KILL (in mineOS where v1 is from) used to be able to kill a while true loop even without yielding
 However it apparently doesn't work here so it's just a rather generic scheduler
 Hopefully(?) learn how to keep this as it allows for preemptive kill which is VERY nice
+But as of now (and probably forever) it is just generic cooperative
 
 --]]
 
@@ -21,6 +22,7 @@ local handlers = {}
 
 local unpack = table.unpack or unpack
 local pack = table.pack or pack
+local traceback = debug.traceback
 
 scheduler.SIG = {
     INT  = "INT",  -- Ctrl+C, thread can choose to exit or not (attach a handler)
@@ -29,7 +31,22 @@ scheduler.SIG = {
     CONT = "CONT", -- Continued
     HUP  = "HUP",  -- Ctrl+D / hangup
     CHLD = "CHLD", -- A child died
+    QUIT = "QUIT", -- CTRL+\
+    TTIN = "TTIN", -- Tried to read term input (cat probably)
+    TTOU = "TTOU", -- Tried to write to terminal when suspended
+
+    [1]  = "HUP",
+    [2]  = "INT",
+    [3]  = "QUIT",
+    [9]  = "KILL",
+    [17] = "CHLD",
+    [18] = "CONT",
+    [20] = "TSTP",
+    [21] = "TTIN",
+    [22] = "TTOU",
 }
+
+scheduler.defaults = {}
 
 local SIGSET = {}
 for _, v in pairs(scheduler.SIG) do
@@ -195,6 +212,7 @@ end
 
 -- I hope so
 function scheduler.isSignal(v)
+    if type(v) == "number" then v = scheduler.SIG[v] or v end
     return type(v) == "string" and SIGSET[v] or false
 end
 
@@ -217,9 +235,28 @@ function scheduler.sendData(cid, value)
     return true
 end
 
+-- yeah this runs something in the targets namespace
+local function runHandle(t, cid, sig, ...)
+    local h = t.handlers and t.handlers[sig]
+    if not h then return false end
+
+    local prev = activeCid
+    activeCid = cid
+    local ok, err = pcall(h, cid, sig, ...)
+    activeCid = prev
+
+    if not ok and klog then
+        klog("Scheduler: signal handle error (" .. sig .. ") | " .. tostring(err))
+    end
+    return true
+end
+
 -- "proper" Signals
 -- CHLD: signal(parent, CHLD, childCid, ok, result)
 function scheduler.signal(cid, sig, ...)
+    if type(sig) == "number" then sig = scheduler.SIG[sig] or sig end
+    if not SIGSET[sig] then return false end
+
     local t = threads[cid]
     if not t then return false end
 
@@ -227,22 +264,42 @@ function scheduler.signal(cid, sig, ...)
     if sig == scheduler.SIG.KILL then
         return scheduler.kill(cid)
     end
+
+    local handled
+
     if sig == scheduler.SIG.TSTP then
+        if runHandle(t, cid, sig, ...) then
+            -- skip TSTP if handled
+            return true
+        end
         return scheduler.stop(cid)
+    end
+
+    if sig == scheduler.SIG.CONT and scheduler.cont(cid) then
+        -- cont()
+        return true
+    end
+
+    -- Handle inside is before out
+    handled = runHandle(t, cid, sig, ...)
+
+    if sig == scheduler.SIG.QUIT then
+        if handled then return true end
+        local default = scheduler.defaults[sig]
+        if default then return default(cid, sig, ...) end
+        return scheduler.kill(cid)
+    end
+
+    if not handled then
+        local default = scheduler.defaults[sig]
+        if default then return default(cid, sig, ...) end
     end
 
     -- Thread sees all this
     t.pendingSignal = sig
     t.signalArgs = { ... }
 
-    local h = t.handlers and t.handlers[sig]
-
-    if h then
-        -- omg handlers
-        h(cid, sig, ...)
-    elseif sig == scheduler.SIG.CONT then
-        scheduler.cont(cid)
-    elseif sig == scheduler.SIG.INT or sig == scheduler.SIG.HUP then
+    if not handled and (sig == scheduler.SIG.INT or sig == scheduler.SIG.HUP) then
         -- Im so kind, I give it one more resume to deal with cleanup by default
         t.cancelled = true
         t.condemned = true
@@ -265,7 +322,6 @@ function scheduler.signal(cid, sig, ...)
             t.eventDeadline = nil
             t.resumeArgs = nil
         end
-
     end
     return true
 end
@@ -274,6 +330,29 @@ function scheduler.signalAll(sig)
     local uids = {}
     for cid in pairs(threads) do uids[#uids + 1] = cid end
     for i = 1, #uids do scheduler.signal(uids[i], sig) end
+end
+
+-- Just registers a handle from the inside
+function scheduler.setHandler(cid, sig, fn)
+    if type(sig) == "number" then sig = scheduler.SIG[sig] or sig end
+    local t = threads[cid]
+    if not t then return false end
+    if sig == scheduler.SIG.KILL or not SIGSET[sig] then return false end
+    checkArg(3, fn, "function", "nil")
+
+    t.handlers = t.handlers or {}
+    t.handlers[sig] = fn
+    return true
+end
+
+function scheduler.getHandler(cid, sig)
+    if type(sig) == "number" then sig = scheduler.SIG[sig] or sig end
+    local t = threads[cid]
+    return t and t.handlers and t.handlers[sig] or nil
+end
+
+function scheduler.clearHandler(cid, sig)
+    return scheduler.setHandler(cid, sig, nil)
 end
 
 -- Left on delivered, tragic
@@ -291,6 +370,44 @@ function scheduler.lastSignal(cid)
         return t.lastSignal, unpack(args, 1, args.n or #args)
     end
     return t.lastSignal
+end
+
+function scheduler.traceback(cid)
+    local t = threads[cid or activeCid]
+    if not t then return nil end
+
+    local native = debug.traceback(t.co)
+    local extra = {}
+    local level = 0
+
+    while true do
+        local info = debug.getinfo(t.co, level, "nS")
+
+        if not info then break end
+
+        -- aaaaaaaaa why debug restricted OC :(
+        if info.what == "Lua" then
+            local source = info.short_src or "?"
+            local defined = info.linedefined or -1
+
+            extra[#extra + 1] = string.format(
+                "[%d] %s (%s, defined: %d)",
+                level,
+                source,
+                info.name or "unknown",
+                defined
+            )
+        end
+
+        level = level + 1
+    end
+
+    if #extra == 0 then
+        return native
+    end
+
+    return native .. "\n\n"
+        .. table.concat(extra, "\n")
 end
 
 -- onExit is a bit jank I think
@@ -336,8 +453,13 @@ function scheduler.spawn(fn, onExit, label, handlers)
     t.lastSignal = nil
     t.lastSignalArgs = nil
     t.condemned = false
-    -- For the love of god can handlers not be so horrible
-    t.handlers = handlers
+    t.handlers = nil
+
+    if handlers then
+        for k, fn in pairs(handlers) do
+            scheduler.setHandler(cid, k, fn)
+        end
+    end
     t.parent = activeCid
     t.label = label or "?"
     t.spawnedAt = computer_uptime()
@@ -405,6 +527,10 @@ function scheduler.stop(cid)
     local t = threads[cid]
     if not t or t.stopped then return false end
 
+    if runHandle(t, cid, scheduler.SIG.TSTP) then
+        return false
+    end
+
     t.stopped = true
     t.pendingSignal = scheduler.SIG.TSTP
 
@@ -419,6 +545,9 @@ end
 function scheduler.cont(cid)
     local t = threads[cid]
     if not t or not t.stopped then return false end
+
+    -- I run the function before the coroutine resumes, maybe this will be optional sometime later?
+    runHandle(t, cid, scheduler.SIG.CONT)
 
     t.stopped = false
     t.pendingSignal = nil

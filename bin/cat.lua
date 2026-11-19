@@ -1,30 +1,31 @@
 -- /bin/cat.lua
 local filesystem = require("filesystem")
-local process = polaris.process
 
 local chunkSize = 2048
+local stopLoop = false
+
+-- mmm handlers
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
 
 -- I hope pipes work again
 local function chunkRead(reader)
     local count = 0
-    local chunk = reader:read(chunkSize)
 
-    while chunk do
+    while not stopLoop do
+        local chunk = reader:read(chunkSize)
+        if not chunk then break end
+
         local ok = io.write(chunk)
         if not ok then break end
 
-        io.flush()
+        count = count + #chunk
 
-        count = count + 1
-        if count % 4 == 0 then
-            local sig = coroutine.yield()
-            if sig == "INT" then
-                os.exit(130)
-            end
-            if sig and process.isSignal(sig) then break end
+        if count >= 2048 then
+            count = 0
+            coroutine.yield()
         end
-
-        chunk = reader:read(chunkSize)
     end
 end
 
@@ -32,22 +33,12 @@ end
 local function readStdin()
     while true do
         local line, _, noNewline = io.read("l")
-        if not line then break end
-
-        if line == "INT" then
-            os.exit(130)
-        end
-
-        -- Lmao how is a signal coming as a line?
-        if process.isSignal(line) then break end
+        if not line or stopLoop then break end
 
         io.write(noNewline and line or (line .. "\n"))
         io.flush()
 
-        local sig = coroutine.yield()
-        if sig == "INT" then
-            os.exit(130)
-        end
+        coroutine.yield()
     end
 end
 

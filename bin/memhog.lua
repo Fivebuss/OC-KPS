@@ -1,7 +1,6 @@
 -- /bin/memhog.lua
 -- lets test GC
 
-local process = require("process")
 local args = { ... }
 
 local verbose = false

@@ -115,6 +115,16 @@ local function loginLoop()
             for _, key in ipairs(keys) do
                 tty:write(tostring(key), ": ", tostring(info[key]), "\n")
             end
+        elseif line == "?mem" then
+            for _ = 1, 10 do
+                computer.pullSignal(0)
+            end
+            local total = computer.totalMemory()
+            local free = computer.freeMemory()
+            local used = total - free
+
+            tty:write(string.format("%s free of %s total, %s used\n",
+                free, total, used))
         elseif not users.exists(line) then
             tty:write("User '" .. line .. "' does not exist\n")
         else

@@ -28,7 +28,8 @@ local sigacts = {
     D = true,        -- ^D eof
     C = "INT",       -- ^C int
     Z = "TSTP",      -- ^Z
-    ["\\"] = "KILL", -- ^\ quit
+    ["\\"] = "QUIT", -- ^\ quit
+    ["?"] = "KILL",  -- ^? (Ctrl+/)
 }
 
 -- Uses polaris.config instead
@@ -55,7 +56,7 @@ function tty.new(gpu, keyboard_addrs)
         end,
     })
 
-    self.attributes = { echo = true, line = true, raw = false, cursor = true, xoff = false }
+    self.attributes = { echo = true, line = true, raw = false, cursor = true, xoff = false, tostop = false }
     self.disabled = {}
     self.attachedUids = {}
     self.onSignal = nil

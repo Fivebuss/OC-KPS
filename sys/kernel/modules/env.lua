@@ -122,6 +122,19 @@ function env.destroy(pid)
     owners[pid] = nil
 end
 
+-- Gives the process "global"
+local function installProcess(pid, e)
+    local sched = polaris.scheduler
+    if not sched or not sched.kernelProcess or pid == sched.kernelProcess then
+        return
+    end
+
+    local proc = process()
+    if proc and e.process == nil then
+        e.process = proc
+    end
+end
+
 -- Current one
 function env.current()
     local p = process()
@@ -132,7 +145,10 @@ function env.current()
         return _G
     end
 
-    return env.forProcess(pid)
+    -- Hopefully save memory?
+    local e = env.forProcess(pid)
+    installProcess(pid, e)
+    return e
 end
 
 return env

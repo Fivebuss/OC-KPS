@@ -4,7 +4,6 @@
 
 local filesystem = require("filesystem")
 local getopt = require("ksh.getopt")
-local process = polaris.process
 local text = require("text")
 
 -- Specify the variables for the options

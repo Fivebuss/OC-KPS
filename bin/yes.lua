@@ -1,7 +1,5 @@
 -- /bin/yes.lua
 -- yes man
-local process = polaris.process
-
 local args = { ... }
 
 local modeChunk = false

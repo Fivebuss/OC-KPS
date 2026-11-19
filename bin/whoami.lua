@@ -1,7 +1,7 @@
 -- /bin/whoami.lua
 -- Oh look, multi-user exists finally
 local args = {...}
-local uid = require("process").self().uid
+local uid = process.self().uid
 local user
 
 if args[1] == "-i" then
@@ -10,7 +10,7 @@ else
     user = getenv("USER") or nil
 end
 if user == nil then
-    user = require("process").self().uid or nil
+    user = process.self().uid or nil
 end
 if user == nil then
     io.writelnError("whoami: Unable to determine user")

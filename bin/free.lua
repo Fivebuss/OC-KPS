@@ -14,9 +14,9 @@ local function fmt(bytes)
         return string.format("%d", math.floor(bytes / 1048576))
     elseif flag == "-h" then
         if bytes >= 1048576 then
-            return string.format("%.1fM", bytes / 1048576)
+            return string.format("%.1fMiB", bytes / 1048576)
         elseif bytes >= 1024 then
-            return string.format("%.1fK", bytes / 1024)
+            return string.format("%.1fKiB", bytes / 1024)
         else
             return string.format("%dB", bytes)
         end

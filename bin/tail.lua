@@ -1,6 +1,5 @@
 -- /bin/tail.lua
 local filesystem = require("filesystem")
-local process = polaris.process
 
 local DEFAULT_LINES = 10
 local READ_CHUNK_SIZE = 4096
@@ -8,6 +7,11 @@ local READ_CHUNK_SIZE = 4096
 local modeLines = true
 local modeCount = DEFAULT_LINES
 local fileArgs = {}
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
 
 -- Support -n and -c
 local function parseCount(value, option, original)
@@ -44,7 +48,6 @@ while i <= #args do
             fileArgs[#fileArgs + 1] = args[j]
         end
         break
-
     elseif a == "-n" or a == "-c" then
         i = i + 1
 
@@ -54,15 +57,12 @@ while i <= #args do
         end
 
         setMode(a, args[i])
-
     elseif a:sub(1, 2) == "-n" or a:sub(1, 2) == "-c" then
         local option = a:sub(1, 2)
         setMode(option, a:sub(3))
-
     elseif a:sub(1, 1) == "-" then
         io.writelnError("tail: unknown option: " .. a)
         os.exit(1)
-
     else
         fileArgs[#fileArgs + 1] = a
     end
@@ -76,11 +76,8 @@ local function printHeader(name)
 end
 
 local function yield()
-    local sig = coroutine.yield()
-    if sig == "INT" then
-        os.exit(130)
-    end
-    return sig and process.isSignal(sig)
+    coroutine.yield()
+    return stopLoop
 end
 
 -- This is problematic as a really bigass line can cause issues but its fine
@@ -138,18 +135,10 @@ local function tailLinesHandle(handle, count)
         end
     end
 
-    while true do
+    while not stopLoop do
         local line = readLine()
 
         if not line then
-            break
-        end
-
-        if line == "INT" then
-            os.exit(130)
-        end
-
-        if process.isSignal(line) then
             break
         end
 
@@ -180,7 +169,7 @@ local function tailBytesHandle(handle, count)
     local totalBytes = 0
     local firstChunk = 1
 
-    while true do
+    while not stopLoop do
         local chunk = handle:read(READ_CHUNK_SIZE)
 
         if not chunk or #chunk == 0 then
@@ -220,22 +209,13 @@ end
 
 local function processStdin()
     if modeLines then
-
         local lines = {}
         local nextLine = 1
 
-        while true do
+        while not stopLoop do
             local line, _, noNewline = io.read("l")
 
             if not line then
-                break
-            end
-
-            if line == "INT" then
-                os.exit(130)
-            end
-
-            if process.isSignal(line) then
                 break
             end
 
@@ -265,15 +245,11 @@ local function processStdin()
         local totalBytes = 0
         local firstChunk = 1
 
-        while true do
+        while not stopLoop do
             local chunk = io.read(READ_CHUNK_SIZE)
 
             if not chunk or #chunk == 0 then
                 break
-            end
-
-            if chunk == "INT" then
-                os.exit(130)
             end
 
             chunks[#chunks + 1] = chunk
@@ -365,6 +341,10 @@ else
     local multiFile = #fileArgs > 1
 
     for _, arg in ipairs(fileArgs) do
+        if stopLoop then
+            break
+        end
+
         if multiFile then
             local label = arg == "-" and "standard input" or arg
             printHeader(label)

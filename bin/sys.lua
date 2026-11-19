@@ -44,7 +44,7 @@ local function status()
     row("Kernel", polaris.version.kernel)
     row("Uptime", secs(computer.uptime()))
     row("Memory", string.format("%d / %d bytes used", total - free, total))
-    row("Processes", #polaris.process.list())
+    row("Processes", #process.list())
     row("Services", string.format("%d running / %d", running, #names))
 
     if verbose then

@@ -2,7 +2,6 @@
 -- not much to say really, alot is just copy paste code
 local filesystem = require("filesystem")
 local getopt = require("ksh.getopt")
-local process = polaris.process
 
 local showLines = false
 local showBytes = false

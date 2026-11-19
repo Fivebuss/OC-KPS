@@ -1,5 +1,6 @@
 # /tmp is broken for w overwrite? tf?
 workspace/
+*.code-workspace
 *.zip
 ref/
 /home/*

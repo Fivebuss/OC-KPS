@@ -286,3 +286,4 @@ io.writeln("kmake: done (" ..
     " total)\nfinished in " ..
     tostring(computer.uptime() - startTime) .. " seconds\nused " .. tostring(os.clock() - startClock) .. " CPU exec time")
 io.flush()
+package.loaded["luaparser"] = nil

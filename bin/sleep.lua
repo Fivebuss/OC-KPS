@@ -1,6 +1,5 @@
 -- /bin/sleep.lua
 -- Thank goodness this can be far easier
-local process = require("process")
 local args = {...}
 
 local units = {

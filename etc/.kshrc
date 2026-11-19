@@ -1,7 +1,7 @@
 # Sets up some stuff
 export SHELL=/bin/ksh.lua
 export TERM=polaris-truecolor
-export VERSION=0.4
+export VERSION=0.5
 export EDITOR='kedit'
 alias id='whoami -i'
 alias stty='sterm'

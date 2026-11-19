@@ -1,7 +1,6 @@
 -- /bin/ksh.lua
 -- Okay more stuff ported
 
-local process = polaris.process
 polaris.analytics.addEvent("ksh-" .. process.self().uid)
 local filesystem = require("filesystem")
 local io = polaris.io
@@ -1643,24 +1642,25 @@ local function resolveJob(spec)
     end
 end
 
--- SIGTTIN Cat dont read please
 local function bgTtyStdin(job)
     local real = ownStdin()
     local stoppedPids = job.stoppedPids
 
     local function checkRead()
         if job.fg or job.done then return end
-        job.stopped = true
-        job.stopNotified = false
         local selfPid = process.self().pid
-        if not stoppedPids[selfPid] then
-            stoppedPids[selfPid] = true
-            stoppedPids[#stoppedPids + 1] = selfPid
-        end
-        process.stop(selfPid)
-        process.yield() -- finally a use for this. I actually thought ahead
-        if not job.fg and not job.done then
-            checkRead()
+        process.signal(selfPid, process.SIG.TTIN)
+        if process.isStopped(selfPid) then
+            job.stopped = true
+            job.stopNotified = false
+            if not stoppedPids[selfPid] then
+                stoppedPids[selfPid] = true
+                stoppedPids[#stoppedPids + 1] = selfPid
+            end
+            process.yield()
+            if not job.fg and not job.done then
+                checkRead()
+            end
         end
     end
 
@@ -1672,6 +1672,30 @@ local function bgTtyStdin(job)
         readLine = function(_, ...)
             checkRead()
             return real:readLine(...)
+        end,
+        close = function() end,
+    }
+end
+
+local function bgTtyOut(job, real)
+    local function checkWrite()
+        if job.fg or job.done or not tty.attributes.tostop then return end
+        local selfPid = process.self().pid
+        process.signal(selfPid, process.SIG.TTOU)
+        process.yield()
+        if not job.fg and not job.done and process.isStopped(selfPid) then
+            checkWrite()
+        end
+    end
+
+    return {
+        write = function(_, ...)
+            checkWrite()
+            return real:write(...)
+        end,
+        flush = function(_)
+            if real.flush then return real:flush() end
+            return true
         end,
         close = function() end,
     }
@@ -1699,6 +1723,8 @@ local function runAsync(tokens, getenv)
     job.pid = spawnSubshell(tokens, {
         gid = process.GID.BG,
         stdin = bgTtyStdin(job),
+        stdout = bgTtyOut(job, ownStdout()),
+        stderr = bgTtyOut(job, ownStderr()),
         cmd = "/bin/ksh.lua",
         label = "ksh-async-executor",
         memberTable = job.members,
@@ -2190,13 +2216,49 @@ builtins["false"] = function(args, stdin, stdout, stderr)
     st().lastExitCode = 1
 end
 
+
 builtins["kill"] = function(args, stdin, stdout, stderr)
-    local sig = "INT" -- default
     local sigNum = 2
     local targets = {}
     local i = 1
 
-    -- -l
+    -- Whoops -SIG was broken
+    local function resolveSignal(tok)
+        if not tok then
+            return nil
+        end
+
+        local n = tonumber(tok)
+        if n then
+            if process.SIG[n] then
+                return n
+            end
+            return nil
+        end
+
+        tok = tok:upper()
+
+        if tok:sub(1, 3) == "SIG" then
+            tok = tok:sub(4)
+        end
+
+        local n = process.SIG[tok]
+        if type(n) == "number" then
+            return n
+        end
+
+        for num, name in pairs(process.SIG) do
+            if type(num) == "number"
+                and type(name) == "string"
+                and name:upper() == tok then
+                return num
+            end
+        end
+
+        return nil
+    end
+
+    -- kill -l
     if args[1] == "-l" then
         local nums = {}
 
@@ -2209,8 +2271,9 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
         table.sort(nums)
 
         for _, n in ipairs(nums) do
-            stdout:write(n .. ") SIG" .. process.SIG[n] .. "\n")
+            stdout:write(process.SIG[n] .. " ")
         end
+        stdout:write("\n")
 
         st().lastExitCode = 0
         return
@@ -2219,64 +2282,46 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
     while i <= #args do
         local a = args[i]
 
-        if a == "-s" then
+        if a == "--" then
+            i = i + 1
+            while i <= #args do
+                targets[#targets + 1] = args[i]
+                i = i + 1
+            end
+            break
+        elseif a == "-s" or a == "-n" then
             i = i + 1
             local tok = args[i]
+
             if not tok then
-                stderr:write("kill: -s requires a signal name\n")
+                stderr:write("kill: " .. a .. " requires an argument\n")
                 st().lastExitCode = 1
                 return
             end
 
-            local n = tonumber(tok) or process.SIG[tok:upper()]
+            local n = resolveSignal(tok)
 
-            if type(n) ~= "number" then
-                stderr:write("kill: unknown signal: " .. tok .. "\n")
-                st().lastExitCode = 1
-                return
-            end
-
-            if not process.SIG[n] then
+            if not n then
                 stderr:write("kill: unknown signal: " .. tok .. "\n")
                 st().lastExitCode = 1
                 return
             end
 
             sigNum = n
-            sig = process.SIG[n]
-        elseif a == "-n" then
-            i = i + 1
-            local tok = args[i]
-            local n = tok and tonumber(tok)
-            if not n or not process.SIG[n] then
-                stderr:write("kill: -n requires a valid signal number\n")
-                st().lastExitCode = 1
-                return
-            end
-
-            sigNum = n
-            sig = process.SIG[n]
         elseif a:sub(1, 1) == "-" and #a > 1 then
-            -- -SIGNAME or -NUM
             local tok = a:sub(2)
-            local n = tonumber(tok) or process.SIG[tok:upper()]
-            if type(n) ~= "number" then
-                stderr:write("kill: unknown signal: " .. tok .. "\n")
-                st().lastExitCode = 1
-                return
-            end
+            local n = resolveSignal(tok)
 
-            if not process.SIG[n] then
+            if not n then
                 stderr:write("kill: unknown signal: " .. tok .. "\n")
                 st().lastExitCode = 1
                 return
             end
 
             sigNum = n
-            sig = process.SIG[n]
         elseif a:sub(1, 1) == "%" then
-            -- jobs %1 %% %+ %-
             local job, err = resolveJob(a)
+
             if not job then
                 stderr:write("kill: " .. tostring(err) .. "\n")
                 st().lastExitCode = 1
@@ -2284,12 +2329,12 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             end
 
             if job.done then
-                -- The process is already gone
                 stderr:write("kill: " .. a .. ": job has already finished\n")
+
                 local jobList = st().asyncJobs
-                for i = #jobList, 1, -1 do
-                    if jobList[i] == job then
-                        table.remove(jobList, i)
+                for j = #jobList, 1, -1 do
+                    if jobList[j] == job then
+                        table.remove(jobList, j)
                         break
                     end
                 end
@@ -2299,6 +2344,7 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             end
 
             local seen = {}
+
             if job.pid then
                 seen[job.pid] = true
                 targets[#targets + 1] = tostring(job.pid)
@@ -2335,7 +2381,8 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
             stderr:write("kill: no such process: " .. t .. "\n")
             ok = false
         else
-            local sent = process.signal(pid, process.SIG[sig])
+            local sent = process.signal(pid, sigNum)
+
             if not sent then
                 stderr:write("kill: operation not permitted for pid: " .. t .. "\n")
                 ok = false
@@ -2345,6 +2392,7 @@ builtins["kill"] = function(args, stdin, stdout, stderr)
 
     st().lastExitCode = ok and 0 or 1
 end
+
 
 builtins["read"] = function(args, stdin, stdout, stderr)
     local raw = false

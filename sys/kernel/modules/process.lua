@@ -28,19 +28,25 @@ local io = require("io")
 local process = {}
 
 process.SIG = {
-    INT   = "INT",
-    KILL  = "KILL",
-    TSTP  = "TSTP",
-    CONT  = "CONT",
-    HUP   = "HUP",
-    CHLD  = "CHLD", -- Yes I know not a handler bite me
+    INT  = "INT",
+    KILL = "KILL",
+    TSTP = "TSTP",
+    CONT = "CONT",
+    HUP  = "HUP",
+    CHLD = "CHLD", -- Yes I know not a handler bite me
+    QUIT = "QUIT",
+    TTIN = "TTIN",
+    TTOU = "TTOU",
 
     [1]  = "HUP",
     [2]  = "INT",
+    [3]  = "QUIT",
     [9]  = "KILL",
     [17] = "CHLD",
     [18] = "CONT",
     [20] = "TSTP",
+    [21] = "TTIN",
+    [22] = "TTOU",
 }
 
 -- omg process groups, but per-user this time
@@ -61,11 +67,44 @@ local KERNEL_UID = 0
 local DEFAULT_GID = process.GID.USER
 local MAX_UNPRIV_GID = process.GID.MISM -- 6-8 unused
 
+local function signalName(sig)
+    if type(sig) == "number" then return process.SIG[sig] or sig end
+    return sig
+end
+
 -- This is weird but it syncs
 local table_ = {}
 
 -- [pid] = { [0]=stdin desc, [1]=stdout desc, [2]=stderr desc }
 local processIO = {}
+
+local function writeErrTo(pid, text)
+    local t = processIO[pid]
+    local err = t and t[2]
+    if err then
+        pcall(function() err:write(text .. "\n") end)
+    elseif klog then
+        klog(text)
+    end
+end
+
+scheduler.defaults[process.SIG.QUIT] = function(pid)
+    writeErrTo(pid, scheduler.traceback(pid) or "quit")
+    return scheduler.kill(pid)
+end
+
+-- Did it stop?
+local function ttyStop(pid)
+    local entry = table_[pid]
+    if not entry or not entry.ctty or entry.gid == process.GID.FG then
+        return true
+    end
+
+    return scheduler.stop(pid)
+end
+
+scheduler.defaults[process.SIG.TTIN] = ttyStop
+scheduler.defaults[process.SIG.TTOU] = ttyStop
 
 -- [uid] = { [gid] = { [pid] = true } }
 local groups = {}
@@ -241,7 +280,7 @@ function process.spawn(fn, opts)
         end
         -- Scheduler forgot it so did we
         table_[pid] = nil
-    end, opts.label)
+    end, opts.label, opts.handlers)
 
     table_[pid] = {
         ppid = ppid,
@@ -298,6 +337,16 @@ function process.get(pid)
         protected = isKernelPid(pid),
         ctty = own.ctty,
     }
+
+    base.setHandle = function(sig, fn)
+        return scheduler.setHandler(pid, sig, fn)
+    end
+    base.getHandle = function(sig)
+        return scheduler.getHandler(pid, sig)
+    end
+    base.clearHandle = function(sig)
+        return scheduler.clearHandler(pid, sig)
+    end
 
     if not info then
         -- scheduler forgot about it before we did somehow, yes this really happened during testing
@@ -454,6 +503,7 @@ end
 -- Signal every member of a (uid, gid)
 function process.signalGroup(uid, gid, sig)
     isKernel()
+    sig = signalName(sig)
 
     local count = 0
     for pid in pairs(groupTree(uid, gid)) do
@@ -580,11 +630,12 @@ end
 
 function process.signal(pid, sig)
     if isKernelPid(pid) then return false end
-    return scheduler.signal(pid, sig)
+    return scheduler.signal(pid, signalName(sig))
 end
 
 function process.signalAll(sig)
     isKernel()
+    sig = signalName(sig)
 
     local kpid = scheduler.kernelProcess
     for pid in pairs(table_) do
@@ -601,6 +652,19 @@ end
 
 function process.isSignal(...)
     return scheduler.isSignal(...)
+end
+
+-- Attach handle
+function process.setHandle(sig, fn)
+    return scheduler.setHandler(scheduler.activeThread(), sig, fn)
+end
+
+function process.getHandle(sig)
+    return scheduler.getHandler(scheduler.activeThread(), sig)
+end
+
+function process.clearHandle(sig)
+    return scheduler.clearHandler(scheduler.activeThread(), sig)
 end
 
 -- Yields an extra tick! Exists to keep signals arriving
@@ -632,7 +696,8 @@ function process.sleep(seconds)
     return scheduler.sleep(seconds)
 end
 
-function process.waitForInput()    -- Used alot less
+-- Wait until it receives data (Usually a signal)
+function process.waitForInput()
     return scheduler.waitForInput()
 end
 

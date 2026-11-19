@@ -1,6 +1,5 @@
 -- /bin/head.lua
 local filesystem = require("filesystem")
-local process = polaris.process
 
 local DEFAULT_LINES = 10
 local READ_CHUNK_SIZE = 4096
@@ -8,6 +7,12 @@ local READ_CHUNK_SIZE = 4096
 local modeLines = true
 local modeCount = DEFAULT_LINES
 local fileArgs = {}
+
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
 
 
 -- il support -n and -c
@@ -36,34 +41,30 @@ local function setMode(option, value)
 end
 
 local i = 1
+local argCount = #args
 
-while i <= #args do
+while i <= argCount do
     local a = args[i]
 
     if a == "--" then
-        for j = i + 1, #args do
+        for j = i + 1, argCount do
             fileArgs[#fileArgs + 1] = args[j]
         end
         break
-
     elseif a == "-n" or a == "-c" then
         i = i + 1
 
-        if i > #args then
+        if i > argCount then
             io.writelnError("head: option requires an argument -- " .. a)
             os.exit(1)
         end
 
         setMode(a, args[i])
-
     elseif a:sub(1, 2) == "-n" or a:sub(1, 2) == "-c" then
-        local option = a:sub(1, 2)
-        setMode(option, a:sub(3))
-
+        setMode(a:sub(1, 2), a:sub(3))
     elseif a:sub(1, 1) == "-" then
         io.writelnError("head: unknown option: " .. a)
         os.exit(1)
-
     else
         fileArgs[#fileArgs + 1] = a
     end
@@ -77,15 +78,12 @@ local function printHeader(name)
 end
 
 local function yield()
-    local sig = coroutine.yield()
-    if sig == "INT" then
-        os.exit(130)
-    end
-    return sig and process.isSignal(sig)
+    coroutine.yield()
+    return stopLoop
 end
 
 local function headBytesHandle(handle, remaining)
-    while remaining > 0 do
+    while remaining > 0 and not stopLoop do
         local chunk = handle:read(math.min(READ_CHUNK_SIZE, remaining))
 
         if not chunk or #chunk == 0 then
@@ -109,34 +107,45 @@ local function lineReader(handle)
     local pos = 1
     local eof = false
     local parts = {}
+    local partCount = 0
 
     return function()
         while true do
             local newline = buffer:find("\n", pos, true)
 
             if newline then
-                parts[#parts + 1] = buffer:sub(pos, newline)
-                local line = table.concat(parts)
-                parts = {}
-
+                local first = buffer:sub(pos, newline)
                 pos = newline + 1
+
+                if partCount == 0 then
+                    return first
+                end
+
+                partCount = partCount + 1
+                parts[partCount] = first
+
+                local line = table.concat(parts, "", 1, partCount)
+                partCount = 0
+
                 return line
             end
 
             if pos <= #buffer then
-                parts[#parts + 1] = buffer:sub(pos)
+                partCount = partCount + 1
+                parts[partCount] = buffer:sub(pos)
             end
 
             buffer = ""
             pos = 1
 
             if eof then
-                if #parts == 0 then
+                if partCount == 0 then
                     return nil
                 end
 
-                local line = table.concat(parts)
-                parts = {}
+                local line = table.concat(parts, "", 1, partCount)
+                partCount = 0
+
                 return line
             end
 
@@ -162,18 +171,10 @@ local function linesHandle(handle, remaining)
         readLine = lineReader(handle)
     end
 
-    while remaining > 0 do
+    while remaining > 0 and not stopLoop do
         local line = readLine()
 
         if not line then
-            break
-        end
-
-        if line == "INT" then
-            os.exit(130)
-        end
-
-        if process.isSignal(line) then
             break
         end
 
@@ -193,24 +194,14 @@ local function processStdin()
     local remaining = modeCount
 
     if modeLines then
-        while remaining > 0 do
+        while remaining > 0 and not stopLoop do
             local line, _, noNewline = io.read("l")
 
             if not line then
                 break
             end
 
-            if line == "INT" then
-                os.exit(130)
-            end
-
-            if process.isSignal(line) then
-                break
-            end
-
-            local output = noNewline and line or (line .. "\n")
-
-            if not io.write(output) then
+            if not io.write(noNewline and line or (line .. "\n")) then
                 break
             end
 
@@ -221,15 +212,11 @@ local function processStdin()
             end
         end
     else
-        while remaining > 0 do
+        while remaining > 0 and not stopLoop do
             local chunk = io.read(math.min(READ_CHUNK_SIZE, remaining))
 
             if not chunk or #chunk == 0 then
                 break
-            end
-
-            if chunk == "INT" then
-                os.exit(130)
             end
 
             if not io.write(chunk) then
@@ -304,6 +291,10 @@ else
     local multiFile = #fileArgs > 1
 
     for _, arg in ipairs(fileArgs) do
+        if stopLoop then
+            break
+        end
+
         if multiFile then
             local label = arg == "-" and "standard input" or arg
             printHeader(label)

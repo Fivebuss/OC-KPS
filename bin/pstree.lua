@@ -3,7 +3,6 @@
 -- half of this isnt my work and was given to me
 
 local getopt = require("ksh.getopt")
-local process = polaris.process
 
 local GROUP_NAMES = {}
 for name, gid in pairs(process.GID) do

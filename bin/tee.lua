@@ -1,6 +1,5 @@
 -- /bin/tee.lua
 local filesystem = require("filesystem")
-local process = polaris.process
 
 local append = false
 local ignoreInt = false

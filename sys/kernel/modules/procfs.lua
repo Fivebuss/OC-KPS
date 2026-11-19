@@ -190,7 +190,9 @@ local function cpuinfoRead()
 
     local blocks = {}
     for addr, item in pairs(info) do
-        if type(item) == "table" and item.class == "processor" then
+        if type(item) == "table"
+        and item.class == "processor"
+        and item.clock ~= nil then -- Why is data card a cpu?
             blocks[#blocks + 1] = ("%s\n%s\n%s\n%s\n%s"):format(
                 row("address", addr),
                 row("clock", item.clock),

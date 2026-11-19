@@ -4,7 +4,7 @@ local computer = require("computer")
 
 -- discard initial
 event.pull(0.05)
-require("process").sleep(0.5)
+process.sleep(0.5)
 
 while true do
     local e = {event.pull()}

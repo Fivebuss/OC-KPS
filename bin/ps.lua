@@ -2,7 +2,6 @@
 -- Shares the name, not the implementation, with Linux ps :)
 
 local getopt = require("ksh.getopt")
-local process = polaris.process
 
 -- GID names
 local GID_NAMES = {}
