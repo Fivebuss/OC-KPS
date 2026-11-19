@@ -58,7 +58,7 @@
   * a tar archiver and unarchiver. It's pretty neat, thanks mpmxyz
   * Some system-specific tools
   * Other misc things that aren't worth mentioning
-* Alot of ram use. Seriously, alot. ~490k idle for one GPU lmao and boots needing ~512k
+* Alot of ram use. Seriously, alot. ~420k idle for one GPU lmao and boots needing ~480k
 
 #### Main libraries
 * event: openOS style but with changes, specifically they arrive now upon a scheduler tick
@@ -95,7 +95,7 @@ Mostly just finishing aformentioned gaps but here:
 * Some kind of virtual console system, PTS/PTY is too complex to bother with though
 * tar package system for optional things, notably networking and multi-gpu as the mgpu driver (only one right now) is very slow due to OC component call times
 * bugfix everything I can find
-* Optimization. Very little done so for the ram side (490k is outrageous)
+* Optimization. Very little done so for the ram side (420k is outrageous)
 * **Actual release** and make documentation
 
 ## Lets talk security

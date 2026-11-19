@@ -74,5 +74,10 @@ if not fn then
     return
 end
 
+chunks = nil
+src = nil
+reason = nil
+loadErr = nil
+
 local args = { table.unpack(args, i + 1) }
 fn(table.unpack(args))

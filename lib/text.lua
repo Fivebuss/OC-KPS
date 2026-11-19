@@ -2,7 +2,6 @@
 -- Also I added &N> support
 
 local unicode = require("unicode")
-local tx = require("transforms")
 
 local text = {}
 text.internal = {}
@@ -53,213 +52,6 @@ function text.removeEscapes(txt)
     return txt:gsub("%%([%(%)%.%%%+%-%*%?%[%^%$])", "%1")
 end
 
--- Tokenize
-
--- Separate a string into an array of words delimited by whitespace
--- Groups quoted text into a single word
---
--- options:
--- delimiters    custom shell delimiters
--- quotes        custom quote definitions
--- show_escapes  preserve backslash escape characters
--- doNotNormalize
-function text.tokenize(value, options)
-    checkArg(1, value, "string")
-    checkArg(2, options, "table", "nil")
-
-    options = options or {}
-
-    local tokens, reason = text.internal.tokenize(value, options)
-
-    if type(tokens) ~= "table" then
-        return nil, reason
-    end
-
-    if options.doNotNormalize then
-        return tokens
-    end
-
-    return text.internal.normalize(tokens)
-end
-
-function text.internal.tokenize(value, options)
-    checkArg(1, value, "string")
-    checkArg(2, options, "table", "nil")
-
-    options = options or {}
-
-    local delimiters = options.delimiters
-    local custom = not not delimiters
-
-    delimiters = delimiters or text.syntax
-
-    local words, reason = text.internal.words(value, options)
-
-    local splitter = text.escapeMagic(
-        custom and table.concat(delimiters) or "<>|;&()"
-    )
-
-    if type(words) ~= "table" or
-        #splitter == 0 or
-        not value:find("[" .. splitter .. "]") then
-        return words, reason
-    end
-
-    return text.internal.splitWords(words, delimiters)
-end
-
-function text.internal.words(input, options)
-    checkArg(1, input, "string")
-    checkArg(2, options, "table", "nil")
-
-    options = options or {}
-
-    local quotes = options.quotes
-    local show_escapes = options.show_escapes
-
-
-    quotes = quotes or {
-        { "'", "'", true },
-        { '"', '"' },
-        { '`', '`' }
-    }
-
-    local function append(dst, txt, stk, fref)
-        local size = #dst
-
-        if size == 0 or dst[size].fref ~= fref then
-            dst[size + 1] = {
-                txt = txt,
-                qr = fref and fref.q or nil,
-                stk = stk,
-                fref = fref
-            }
-        else
-            dst[size].txt = dst[size].txt .. txt
-        end
-    end
-
-    -- qr quot rules
-
-    local tokens = {}
-    local token = {}
-
-    -- Oh look subshells continue to ruin my day
-    local frames = {}
-    local depth = 0
-    local prevDollar = false
-    local dbrace = 0
-
-    local escaped = false
-
-    -- You know what? Fine. Il do it this way.
-    local function currentStack()
-        if #frames == 0 then return nil end
-        local stk = {}
-        for k = 1, #frames do
-            stk[k] = frames[k]
-        end
-        return stk
-    end
-
-    for i = 1, unicode.len(input) do
-        local char = unicode.sub(input, i, i)
-
-        local top = frames[#frames]
-        local topq = top and top.q or nil
-        local qhere = (top and top.lvl == depth) and topq or nil
-
-        if dbrace > 0 and char == "}" then
-            dbrace = dbrace - 1
-        end
-        if prevDollar and char == "{" then
-            dbrace = dbrace + 1
-        end
-
-        if escaped then
-            escaped = false
-            prevDollar = false
-
-            -- Escape handling
-            -- again. It was broken horrificly
-            if show_escapes or dbrace > 0 or (topq and not topq[3]) or char == "$"
-                or char == "{" or char == "}" or char == "," then
-                append(token, "\\", top and currentStack(), top)
-            end
-
-            append(token, char, top and currentStack(), top)
-        elseif char == "\\" and (not topq or not topq[3]) then
-            escaped = true
-            prevDollar = false
-        elseif char == "(" then
-            -- "$("
-            if qhere and not (prevDollar and not qhere[3]) then
-                append(token, char, top and currentStack(), top)
-            else
-                depth = depth + 1
-                append(token, char, top and currentStack(), top)
-            end
-            prevDollar = false
-        elseif char == ")" then
-            if qhere then
-                append(token, char, top and currentStack(), top)
-            else
-                if depth > 0 then
-                    depth = depth - 1
-                end
-                append(token, char, top and currentStack(), top)
-            end
-            prevDollar = false
-        elseif qhere and topq[2] == char then
-            if not top.nparts or top.nparts == 0 then
-                append(token, "", top and currentStack(), top)
-            end
-            table.remove(frames)
-            prevDollar = false
-        elseif qhere then
-            if not top.nparts then top.nparts = 0 end
-            top.nparts = top.nparts + 1
-            append(token, char, top and currentStack(), top)
-            prevDollar = (char == "$")
-        elseif #frames == 0 and string.find(char, "%s") then
-            if #token > 0 then
-                table.insert(tokens, token)
-            end
-
-            token = {}
-            prevDollar = false
-        else
-            local rec
-            tx.first(quotes, function(Q)
-                rec = Q[1] == char and Q or nil
-                return rec
-            end)
-            if rec then
-                table.insert(frames, { q = rec, lvl = depth, pos = i })
-                prevDollar = false
-            else
-                if top then
-                    if not top.nparts then top.nparts = 0 end
-                    top.nparts = top.nparts + 1
-                end
-                append(token, char, top and currentStack(), top)
-                prevDollar = (char == "$")
-            end
-        end
-    end
-
-    if #frames > 0 then
-        return nil, "unclosed quote at index " .. frames[1].pos
-    end
-
-    if #token > 0 then
-        table.insert(tokens, token)
-    end
-
-    return tokens
-end
-
--- Split strings by delimiters
 function text.split(input, delimiters, dropDelims, di)
     checkArg(1, input, "string")
     checkArg(2, delimiters, "table")
@@ -326,248 +118,246 @@ function text.split(input, delimiters, dropDelims, di)
     return result
 end
 
--- Split at shell delimit
-function text.internal.splitWords(words, delimiters)
-    checkArg(1, words, "table")
-    checkArg(2, delimiters, "table")
+-- Split strings by delimiters
+local function findDelimiter(txt, delimiters, start)
+    local bestS
+    local bestE
+    local bestLen
 
-    local split_words = {}
+    for i = 1, #delimiters do
+        local s, e = txt:find(delimiters[i], start)
 
-    local function add_word(word)
-        if #word > 0 then
-            split_words[#split_words + 1] = word
+        if s and (
+                not bestS
+                or s < bestS
+                or (s == bestS and (e - s) > bestLen)
+            ) then
+            bestS = s
+            bestE = e
+            bestLen = e - s
         end
     end
 
-    -- Find the earliest delimiter at or after start, if multiple use longest
-    local function find_delimiter(txt, start)
-        local best_s
-        local best_e
-        local best_len
-
-        for i = 1, #delimiters do
-            local pattern = delimiters[i]
-            local s, e = txt:find(pattern, start)
-
-            if s and (
-                    not best_s
-                    or s < best_s
-                    or (s == best_s and (e - s) > best_len)
-                ) then
-                best_s = s
-                best_e = e
-                best_len = e - s
-            end
-        end
-
-        return best_s, best_e
-    end
-
-    for wi = 1, #words do
-        local word = words[wi]
-
-        -- quoted shouldnt be shell stuff
-        local current = {}
-
-        local function flush()
-            if #current > 0 then
-                add_word(current)
-                current = {}
-            end
-        end
-
-        for pi = 1, #word do
-            local part = word[pi]
-
-            if part.qr then
-                -- And here either
-                current[#current + 1] = part
-            else
-                local txt = part.txt
-                local pos = 1
-
-                while pos <= #txt do
-                    local s, e = find_delimiter(txt, pos)
-
-                    if not s then
-                        if pos <= #txt then
-                            current[#current + 1] = {
-                                txt = txt:sub(pos),
-                                qr = nil
-                            }
-                        end
-                        break
-                    end
-
-                    -- Before operator text?
-                    if s > pos then
-                        current[#current + 1] = {
-                            txt = txt:sub(pos, s - 1),
-                            qr = nil
-                        }
-                    end
-
-                    flush()
-
-                    current[#current + 1] = {
-                        txt = txt:sub(s, e),
-                        qr = nil
-                    }
-
-                    flush()
-
-                    pos = e + 1
-                end
-            end
-        end
-
-        flush()
-    end
-
-    return split_words
+    return bestS, bestE
 end
 
--- Parse/normalize tokens
+-- Tokenize
+-- Again.
+function text.internal.tokenize(value, options)
+    checkArg(1, value, "string")
+    checkArg(2, options, "table", "nil")
 
-function text.internal.normalize(words, omitQuotes)
-    checkArg(1, words, "table")
-    checkArg(2, omitQuotes, "boolean", "nil")
+    options = options or {}
 
-    local norms = {}
+    local delimiters = options.delimiters or text.syntax
+    local quotes = options.quotes or {
+        { "'", "'", true },
+        { '"', '"' },
+        { '`', '`' }
+    }
+    local showEscapes = options.show_escapes
 
-    -- I DESPISE QUOTES. THIS TOOK AN HOUR AND A HALF TO FIX
-    -- but now \n works in things. Worth it (it wasn't)
-    for _, word in ipairs(words) do
-        local norm = {}
-        local stack = {}
+    local words = {}
+    local buf = {}
+    local mask = {}
 
-        local function emit(v)
-            norm[#norm + 1] = v
+    local frames = {}
+    local depth = 0
+    local prevDollar = false
+    local dbrace = 0
+    local escaped = false
+
+    local function emit(ch, unquoted)
+        buf[#buf + 1] = ch
+        for _ = 1, #ch do
+            mask[#mask + 1] = unquoted
         end
-
-        local function closeThrough(to)
-            while #stack > to do
-                if not omitQuotes then
-                    emit(stack[#stack].q[2])
-                end
-                table.remove(stack)
-            end
-        end
-
-        local function openThrough(st)
-            for k = #stack + 1, #st do
-                local f = st[k]
-                if not omitQuotes then
-                    emit(f.q[1])
-                end
-                stack[#stack + 1] = f
-            end
-        end
-
-        -- Cursed
-        for _, part in ipairs(word) do
-            local st = part.stk or {}
-
-            local prefix = 0
-            while prefix < #stack and prefix < #st and st[prefix + 1] == stack[prefix + 1] do
-                prefix = prefix + 1
-            end
-            closeThrough(prefix)
-            openThrough(st)
-
-            emit(part.txt)
-        end
-
-        closeThrough(0)
-
-        norms[#norms + 1] = table.concat(norm)
     end
 
-    return norms
+    local function flushWord()
+        if #buf > 0 then
+            words[#words + 1] = { text = table.concat(buf), mask = mask }
+            buf = {}
+            mask = {}
+        end
+    end
+
+    -- This gives me headaches
+    for i = 1, unicode.len(value) do
+        local char = unicode.sub(value, i, i)
+        local top = frames[#frames]
+        local topq = top and top.q or nil
+        local qhere = (top and top.lvl == depth) and topq or nil
+        local unquoted = (#frames == 0)
+
+        if dbrace > 0 and char == "}" then
+            dbrace = dbrace - 1
+        end
+        if prevDollar and char == "{" then
+            dbrace = dbrace + 1
+        end
+
+        if escaped then
+            escaped = false
+            prevDollar = false
+
+            if showEscapes or dbrace > 0 or (topq and not topq[3]) or
+                char == "$" or char == "{" or char == "}" or char == "," then
+                emit("\\", unquoted)
+            end
+
+            emit(char, unquoted)
+        elseif char == "\\" and (not topq or not topq[3]) then
+            escaped = true
+            prevDollar = false
+        elseif char == "(" then
+            if qhere and not (prevDollar and not qhere[3]) then
+                emit(char, unquoted)
+            else
+                depth = depth + 1
+                emit(char, unquoted)
+            end
+            prevDollar = false
+        elseif char == ")" then
+            if qhere then
+                emit(char, unquoted)
+            else
+                if depth > 0 then depth = depth - 1 end
+                emit(char, unquoted)
+            end
+            prevDollar = false
+        elseif qhere and topq[2] == char then
+            emit(topq[2], false)
+            table.remove(frames)
+            prevDollar = false
+        elseif qhere then
+            emit(char, unquoted)
+            prevDollar = (char == "$")
+        elseif unquoted and string.find(char, "%s") then
+            flushWord()
+            prevDollar = false
+        else
+            local rec
+            for k = 1, #quotes do
+                if quotes[k][1] == char then
+                    rec = quotes[k]
+                    break
+                end
+            end
+
+            if rec then
+                frames[#frames + 1] = { q = rec, lvl = depth, pos = i } -- fix
+                emit(rec[1], false)
+                prevDollar = false
+            else
+                emit(char, unquoted)
+                prevDollar = (char == "$")
+            end
+        end
+    end
+
+    if #frames > 0 then
+        return nil, "unclosed quote at index " .. frames[1].pos
+    end
+
+    flushWord()
+
+    local tokens = {}
+
+    -- aaa utf 8 how I hate you
+    for _, word in ipairs(words) do
+        local source = word.text
+        local quoted = word.mask
+        local seg = {}
+        local segLen = 0
+
+        local function flushSeg()
+            if segLen > 0 then
+                tokens[#tokens + 1] = table.concat(seg)
+                seg = {}
+                segLen = 0
+            end
+        end
+        -- yay its less memory
+        local i = 1
+        while i <= #source do
+            local matched
+            if quoted[i] then
+                local ds, de = findDelimiter(source, delimiters, i)
+                if ds == i then matched = de end
+            end
+
+            if matched then
+                flushSeg()
+                tokens[#tokens + 1] = source:sub(i, matched)
+                i = matched + 1
+            else
+                seg[#seg + 1] = source:sub(i, i)
+                segLen = segLen + 1
+                i = i + 1
+            end
+        end
+
+        flushSeg()
+    end
+
+    return tokens
+end
+
+function text.tokenize(value, options)
+    checkArg(1, value, "string")
+    checkArg(2, options, "table", "nil")
+
+    return text.internal.tokenize(value, options or {})
 end
 
 -- Deal with braces
-local function parseBraceList(tokens, i)
-    local inner = {}
-    local n = #tokens
-    local commandStart = true
-
-    while i <= n do
-        local tok = tokens[i]
-
-        if type(tok) == "string" and tok == "{" and commandStart then
-            local nested, nextIndex = parseBraceList(tokens, i + 1)
-            if not nested then
-                return nil, nextIndex
-            end
-            inner[#inner + 1] = { braceGroup = nested }
-            i = nextIndex
-            commandStart = false
-        elseif type(tok) == "string" and tok == "}" and commandStart then
-            local last = inner[#inner]
-            if not last then
-                return nil, "empty { } list"
-            end
-            if last ~= ";" and last ~= "&" then
-                return nil, "missing ';' before '}'"
-            end
-            return inner, i + 1
-        elseif type(tok) == "string" and
-            (tok == ";" or tok == "&" or tok == "&&" or tok == "||" or tok == "|") then
-            if commandStart then
-                return nil, "unexpected '" .. tok .. "'"
-            end
-            inner[#inner + 1] = tok
-            commandStart = true
-            i = i + 1
-        else
-            inner[#inner + 1] = tok
-            commandStart = false
-            i = i + 1
-        end
-    end
-
-    return nil, "missing '}'"
-end
-
 function text.internal.braceGroups(tokens)
     checkArg(1, tokens, "table")
 
-    local out = {}
-    local i
-    i = 1
-    local n = #tokens
-    local commandStart = true
+    local function parse(list, i, inner)
+        local out = {}
+        local n = #list
+        local commandStart = true
 
-    while i <= n do
-        local tok = tokens[i]
+        while i <= n do
+            local tok = list[i]
 
-        if type(tok) == "string" and tok == "{" and commandStart then
-            local inner, nextIndex = parseBraceList(tokens, i + 1)
-            if not inner then
-                return nil, nextIndex
+            if type(tok) == "string" and tok == "{" and commandStart then
+                local nested, nextIndex = parse(list, i + 1, true)
+                if not nested then return nil, nextIndex end
+                out[#out + 1] = { braceGroup = nested }
+                i = nextIndex
+                commandStart = false
+            elseif type(tok) == "string" and tok == "}" and commandStart then
+                if inner then
+                    local last = out[#out]
+                    if not last then return nil, "empty { } list" end
+                    if last ~= ";" and last ~= "&" then
+                        return nil, "missing ';' before '}'"
+                    end
+                    return out, i + 1
+                end
+
+                return nil, "unexpected '}'"
+            elseif type(tok) == "string" and
+                (tok == ";" or tok == "&" or tok == "&&" or tok == "||" or tok == "|") then
+                if commandStart then return nil, "unexpected '" .. tok .. "'" end
+                out[#out + 1] = tok
+                commandStart = true
+                i = i + 1
+            else
+                out[#out + 1] = tok
+                commandStart = false
+                i = i + 1
             end
-            out[#out + 1] = { braceGroup = inner }
-            commandStart = false
-            i = nextIndex
-        elseif type(tok) == "string" and tok == "}" and commandStart then
-            return nil, "unexpected '}'"
-        elseif type(tok) == "string" and
-            (tok == ";" or tok == "&" or tok == "&&" or tok == "||" or tok == "|") then
-            if commandStart then
-                return nil, "unexpected '" .. tok .. "'"
-            end
-            out[#out + 1] = tok
-            commandStart = true
-            i = i + 1
-        else
-            out[#out + 1] = tok
-            commandStart = false
-            i = i + 1
         end
+
+        if inner then return nil, "missing '}'" end
+        return out
     end
 
-    return out
+    return parse(tokens, 1, false)
 end
 
 -- Formatting

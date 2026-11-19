@@ -194,6 +194,8 @@ local function processStdin()
     local remaining = modeCount
 
     if modeLines then
+        local lines = {}
+
         while remaining > 0 and not stopLoop do
             local line, _, noNewline = io.read("l")
 
@@ -201,15 +203,20 @@ local function processStdin()
                 break
             end
 
-            if not io.write(noNewline and line or (line .. "\n")) then
-                break
-            end
+            lines[#lines + 1] =
+                noNewline and line or (line .. "\n")
 
             remaining = remaining - 1
 
-            if remaining > 0 and yield() then
-                break
+            if remaining > 0 then
+                if yield() then
+                    break
+                end
             end
+        end
+
+        if #lines > 0 then
+            io.write(table.concat(lines))
         end
     else
         while remaining > 0 and not stopLoop do
@@ -225,8 +232,10 @@ local function processStdin()
 
             remaining = remaining - #chunk
 
-            if remaining > 0 and yield() then
-                break
+            if remaining > 0 then
+                if yield() then
+                    break
+                end
             end
         end
     end

@@ -4,6 +4,8 @@ local unicode = require("unicode")
 local filesystem = {}
 local mtab = { name = "", children = {}, links = {} }
 local fstab = {}
+local visited = {}
+local ancestry = {}
 
 local function segments(path)
     local parts = {}
@@ -22,9 +24,9 @@ end
 
 local function findNode(path, create, resolve_links)
     checkArg(1, path, "string")
-    local visited = {}
+    for k in pairs(visited) do visited[k] = nil end
+    for k in pairs(ancestry) do ancestry[k] = nil end
     local parts = segments(path)
-    local ancestry = {}
     local node = mtab
     local index = 1
     while index <= #parts do
@@ -265,6 +267,30 @@ function filesystem.list(path)
     end
 end
 
+-- Cheap memory 
+local fileMethods = {}
+local fileMt = {
+    __index = function(tbl, key)
+        if not tbl.fs[key] then return end
+        if not tbl.handle then
+            ---@diagnostic disable-next-line: redundant-return-value
+            return nil, "file is closed"
+        end
+        local method = fileMethods[key]
+        if not method then
+            method = function(self, ...)
+                local h = self.handle
+                if key == "close" then
+                    self.handle = nil
+                end
+                return self.fs[key](h, ...)
+            end
+            fileMethods[key] = method
+        end
+        return method
+    end
+}
+
 function filesystem.open(path, mode)
     checkArg(1, path, "string")
     mode = tostring(mode or "r")
@@ -289,22 +315,7 @@ function filesystem.open(path, mode)
     return setmetatable({
         fs = node.fs,
         handle = handle,
-    }, {
-        __index = function(tbl, key)
-            if not tbl.fs[key] then return end
-            if not tbl.handle then
-                ---@diagnostic disable-next-line: redundant-return-value
-                return nil, "file is closed"
-            end
-            return function(self, ...)
-                local h = self.handle
-                if key == "close" then
-                    self.handle = nil
-                end
-                return self.fs[key](h, ...)
-            end
-        end
-    })
+    }, fileMt)
 end
 
 filesystem.findNode = findNode

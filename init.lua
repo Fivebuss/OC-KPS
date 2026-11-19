@@ -137,6 +137,9 @@ for i = 1, #bootNames do
     end
     chunk()
 end
+
+bootScripts = nil
+bootNames = nil
 if polaris.config and polaris.config["debug"] ~= true then _G.status = nil end
 
 -- Enter scheduler loop

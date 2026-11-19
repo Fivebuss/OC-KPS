@@ -158,5 +158,9 @@ polaris.panic = function()
     end
 end
 
+for name in pairs(package.loaded) do
+    package.preload[name] = nil
+end
+
 polaris.analytics.addEvent("kinit_end")
 return ("Polaris " .. polaris.version.kernel .. " loaded")

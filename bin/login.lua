@@ -37,8 +37,10 @@ local function launchKShell(user, uid)
         env.setenv("USER", user)
         env.setenv("HOME", env.home)
         env.gpu = gpu
+        local reason
+        local src
 
-        local src, reason = filesystem.open("/bin/ksh.lua", "r")
+        src, reason = filesystem.open("/bin/ksh.lua", "r")
         if not src then
             error(reason or "cannot open /bin/ksh.lua", 0)
         end
@@ -62,6 +64,13 @@ local function launchKShell(user, uid)
         end
 
         fn()
+
+        -- How did I forget this? 40k memory cost holy shit
+        chunks = nil
+        src = nil
+        fn = nil
+        loadErr = nil
+        reason = nil
 
         process.waitForInput()
     end, {
