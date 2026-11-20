@@ -99,6 +99,10 @@ end
 local function loginLoop()
     tty:clear()
     tty:write("KPS v" .. polaris.version.os .. " Login\ntty bound to GPU " .. tostring(gpu) .. "\n")
+    if _VERSION == "Lua 5.3" then
+        tty:write(
+            "Lua 5.3 system detected, reccomend switch to 5.4 if available\nMemory usage will be higher!\n")
+    end
 
     local stdin = process.input()
 

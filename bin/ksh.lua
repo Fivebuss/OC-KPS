@@ -26,9 +26,6 @@ local tty = polaris.console.openTTY({
 
 tty:setCursorShape("underline")
 
-
---polaris.config["tty.profile"] = 7
-
 -- Pipeline stuff
 local function readerPassthrough(reader)
     return {
@@ -227,11 +224,16 @@ local function stripQuotes(s)
     return s
 end
 
+local runCommandString
+
 local function makeConsole(pwd)
     return {
         resolvePath = resolvePath,
         currPath = function() return pwd end,
         stripQuotes = stripQuotes,
+        execute = function(command)
+            return runCommandString(command, false)
+        end,
     }
 end
 
@@ -1237,6 +1239,7 @@ local function runPipeline(parsedSegments, tempAssigns, getenv)
                         shellStates[process.activeThread()] = snapshotState(spawnGid)
                         local env = polaris.env.current()
                         env.console = makeConsole(spawnPwd)
+                        env.os.execute = env.console.execute
                         env.args = argv(seg.args)
                         env.ctty =
                             tty -- current tty, I am too lazy to deal with /dev/tty* bs and this is far easier for me
@@ -3144,6 +3147,114 @@ local function executeLine(line, getenv)
     if #tokens == 0 then return end
 
     executeTokens(tokens, getenv)
+end
+
+-- popen
+runCommandString = function(command, wantOutput)
+    if type(command) ~= "string" or #command == 0 then
+        return false
+    end
+
+    local tokens, terr = tokenize(stripComments(command))
+    if not tokens or #tokens == 0 then
+        return false
+    end
+
+    local caller = process.activeThread()
+    local status = 0
+    local done = false
+    local job = { done = false }
+
+    -- Hello? Are you there?
+    local function touchTTY(sig)
+        if job.done then return end
+        local selfPid = process.self().pid
+        process.signal(selfPid, sig)
+        if process.isStopped(selfPid) then
+            process.signal(selfPid, process.SIG.CONT)
+            process.yield()
+        end
+    end
+
+    local function guardedReader(real, sig)
+        return {
+            read = function(_, ...)
+                touchTTY(sig)
+                return real:read(...)
+            end,
+            readLine = function(_, ...)
+                touchTTY(sig)
+                return real:readLine(...)
+            end,
+            close = function() end,
+        }
+    end
+
+    local function guardedWriter(real, sig)
+        return {
+            write = function(_, ...)
+                if sig ~= process.SIG.TTOU or tty.attributes.tostop then
+                    touchTTY(sig)
+                end
+                return real:write(...)
+            end,
+            flush = function(_)
+                if real.flush then return real:flush() end
+                return true
+            end,
+            close = function() end,
+        }
+    end
+
+    local stdin, stdout, stderr, pipe
+    if wantOutput then
+        pipe = io.newPipe(polaris.scheduler, 2048)
+        stdin = guardedReader(readerPassthrough(process.input()), process.SIG.TTIN)
+        stdout = pipe
+    else
+        stdin = io.newStream()
+        stdout = guardedWriter(ttyOutPassthrough(), process.SIG.TTOU)
+    end
+    stderr = guardedWriter(ttyOutPassthrough(), process.SIG.TTOU)
+
+    -- They run in a subshell
+    spawnSubshell(tokens, {
+        stdin = stdin,
+        stdout = stdout,
+        stderr = stderr,
+        gid = process.GID.BG,
+        cmd = command,
+        label = wantOutput and "ksh.popen" or "ksh.execute",
+        onExit = function(success, exitCode)
+            status = type(exitCode) == "number" and exitCode or (success and 0 or 1)
+            done = true
+            job.done = true
+            process.send(caller, true)
+        end,
+    })
+
+    st().fgBusy = true
+    if wantOutput then
+        local chunks = {}
+        while true do
+            local chunk, why = pipe:read()
+            if chunk then
+                chunks[#chunks + 1] = chunk
+            elseif why then
+            else
+                break
+            end
+        end
+        while not done do process.yield() end
+        st().fgBusy = false
+        pipe:closeRead()
+
+        return table.concat(chunks), status
+    end
+
+    while not done do process.waitForInput() end -- jank
+    st().fgBusy = false
+    return status
 end
 
 -- I am lazy so we just natively source stuff

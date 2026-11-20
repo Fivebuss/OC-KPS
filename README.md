@@ -115,7 +115,6 @@ of using io.write() instead of GPU calls and it's very slow as a result
 Using my fork of DumbLuaParser I parse, minify, escape and shove boot scripts and kernel modules into "bundled" files. This removes ALOT of i/o cost and even ram use funnily enough. \
 However, compilation needs 2xtier3.5 memory for kernel and 2.5(?) for boot scripts. Lua ASTs are extremely memory intensive even with my DLP changes
 
-However, for release versions once those exist, I will ship compiled versions by default. but due to debugging problems, I may ship both source and compiled, but that's a problem for later
 
 ## The elephant in the room: AI
 Full disclosure, I used it, especially for testing and for string patterns, and other nightmares\
@@ -123,6 +122,6 @@ I have a soul and not unlimited time
 
 #### Why I am doing this
 No real reason, basically because I can to be honest.\
-I wanted a multi-gpu project and my own shell originally on mineOS. Well that was hell to do so I moved to my own OS thing
+I wanted a multi-gpu project and my own shell originally on mineOS. Which is hell to work with and just not a place for a shell. As no existing OS really fit what I wanted, I just made my own for it
 
 ``See LICENSE and LICENSEINFO.md``

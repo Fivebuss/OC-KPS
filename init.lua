@@ -7,7 +7,7 @@ local unicode = unicode
 
 local addr = computer.getBootAddress()
 local invoke = component.invoke
-_G._OSVERSION = "0.4"
+_G._OSVERSION = "0.5"
 
 
 -- Load and execute a Lua file.
@@ -148,5 +148,5 @@ if polaris.config and polaris.config["debug"] ~= true then _G.status = nil end
 local event_internals =
     require("event_internals")
 while true do
-    event_internals.pullSignal()
+    if event_internals.pullSignal() == "Halt" then break end
 end

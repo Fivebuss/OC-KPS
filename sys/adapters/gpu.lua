@@ -11,7 +11,7 @@ return function(proxy)
     screen = {link=screen,isAvailable=proxy.getScreen},
     depth = {write = adapter_api.createWriter(proxy.setDepth, 1, "number"), proxy.getDepth()},
     maxDepth = {proxy.maxDepth()},
-    background = {write = adapter_api.createWriter(proxy.setBackground, 1, "number", "boolean"), proxy.getBackground()},
-    foreground = {write = adapter_api.createWriter(proxy.setForeground, 1, "number", "boolean"), proxy.getForeground()},
+    background = {write = adapter_api.createWriter(proxy.setBackground, 1, "number"), proxy.getBackground()},
+    foreground = {write = adapter_api.createWriter(proxy.setForeground, 1, "number"), proxy.getForeground()},
   }
 end

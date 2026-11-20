@@ -2,8 +2,28 @@
 local computer = require("computer")
 local event = require("event")
 
+local w, h = polaris.gpu.getResolution()
+
+local y = 1
+--local w, h = 0, 0
+
+local function status(msg)
+    msg = tostring(msg)
+
+    polaris.gpu.set(1, y, msg)
+
+    if y == h then
+        polaris.gpu.copy(1, 2, w, h - 1, 0, -1)
+        polaris.gpu.fill(1, h, w, 1, " ")
+    else
+        y = y + 1
+    end
+end
+
 local function prepareHalt(signal, keepUid)
     -- Hey guys, prepare to die
+    status("prepareHalt()")
+    status("Terminating services")
     event.push(tostring(signal))
     polaris.services.halt()
 
@@ -12,6 +32,7 @@ local function prepareHalt(signal, keepUid)
     local keep = keepUid or selfUid
 
     -- Send out INT
+    status("Terminating processes")
     local scheduler = polaris.scheduler
     for _, info in ipairs(scheduler.list()) do
         local uid = info.cid
@@ -23,13 +44,18 @@ local function prepareHalt(signal, keepUid)
     -- Il be nice, you can have some time to shutdown
     local deadline = computer.uptime() + 2
     while computer.uptime() < deadline and scheduler.threadCount() > 2 do
-        -- threadCount > 2: kernel + caller still alive, wait for the rest
-        coroutine.yield()
+        status("Scheduler did not finish!")
+        polaris.scheduler.yield()
     end
+    status("Sending SIGKILL to all processes")
     -- Not all the time though
     scheduler.killAll(keep)
     scheduler.cleanup(event)
+    status("Terminating event handlers")
+    computer.pullSignal()
     scheduler.deinit(event, scheduler.handler)
+    event.pushSignal("Halt")
+    status("<--System shutdown-->")
 end
 
 local function call(syscall, ...)
@@ -89,7 +115,7 @@ end
 -- Syscalls themselves
 polaris.syscalls.shutdown = function(ctx)
     prepareHalt("shutdown", ctx and ctx.caller)
-    computer.shutdown()
+    --computer.shutdown()
 end
 
 polaris.syscalls.reboot = function(ctx)

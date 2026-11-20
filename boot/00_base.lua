@@ -98,24 +98,9 @@ function dofile(path, ...)
     return fn(...)
 end
 
--- Just an alias really to process.spawn
-function os.execute(path, opts)
-    checkArg(1, path, "string")
-    checkArg(2, opts, "table", "nil")
-
-    local buffer, reason = readFile(path)
-    if not buffer then
-        return nil, reason
-    end
-
-    return process.spawn(function()
-        local env = polaris.env.current()
-        local fn, err = env.load(buffer, "=" .. path, "bt")
-        if not fn then
-            error(err, 0)
-        end
-        return fn()
-    end, opts)
+-- Not our job
+function os.execute()
+    return "os.execute() must be used from a shell-managed environment"
 end
 
 -- mmmmmm syscalls

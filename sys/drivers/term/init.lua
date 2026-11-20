@@ -20,43 +20,40 @@ local mmax, mmin = math.max, math.min
 local sfind, ssub = string.find, string.sub
 
 local color_profiles = {
-    { 0x000000, 0xaa0000, 0x00aa00, 0xaa5500,
-        0x0000aa, 0xaa00aa, 0x00aaaa, 0xaaaaaa,
-        0x555555, 0xff5555, 0x55ff55, 0xffff55,
-        0x5555ff, 0xff55ff, 0x55ffff, 0xffffff },
-    { 0x232627, 0xed1515, 0x11d116, 0xf67400,
-        0x1d99f3, 0x9b59b6, 0x1abc9c, 0xfcfcfc,
-        0x7f8c8d, 0xc0392b, 0x1cdc9a, 0xfdbc4b,
-        0x3daee9, 0x8e44ad, 0x16a085, 0xffffff },
-    { 0x282828, 0xcc241d, 0x98971a, 0xd79921,
-        0x458588, 0xb16286, 0x689d6a, 0xa89984,
-        0x928374, 0xfb4934, 0xb8bb26, 0xfabd2f,
-        0x83a598, 0xd3869b, 0x8ec07c, 0xebdbb2 },
-    { 0xfbf1c7, 0xcc241d, 0x98971a, 0xd79921,
-        0x458588, 0xb16286, 0x689d6a, 0x7c6f64,
-        0x928374, 0x9d0006, 0x79740e, 0xb57614,
-        0x076678, 0x8f3f71, 0x427b58, 0x3c3836 },
-    { 0xeeeeee, 0xaf0000, 0x008700, 0x5f8700,
-        0x0087af, 0x878787, 0x005f87, 0x444444,
-        0xbcbcbc, 0xd70000, 0xd70087, 0x8700af,
-        0xd75f00, 0xd75f00, 0x005faf, 0x005f87 },
-    { 0x292d3e, 0xf07178, 0xc3e88d, 0xffcb6b,
-        0x82aaff, 0xc792ea, 0x89ddff, 0xd0d0d0,
-        0x434758, 0xff8b92, 0xddffa7, 0xffe585,
-        0x9cc4ff, 0xe1acff, 0xa3f7ff, 0xffffff },
+    -- vga one from cynosure, looks great
     {
-        0x000000,
-        0xFF5555, 0x55FF55, 0xFFFF55,
-        0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
-        0x888888,
-        0xFF5555, 0x55FF55, 0xFFFF55,
-        0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+        0x000000, -- black
+        0xaa0000, -- red
+        0x00aa00, -- green
+        0xaa5500, -- yellow
+        0x0000aa, -- blue
+        0xaa00aa, -- magenta
+        0x00aaaa, -- cyan
+        0xaaaaaa, -- white
+
+        0x555555, -- bright black
+        0xff5555, -- bright red
+        0x55ff55, -- bright green
+        0xffff55, -- bright yellow
+        0x5555ff, -- bright blue
+        0xff55ff, -- bright magenta
+        0x55ffff, -- bright cyan
+        0xffffff, -- bright white
     },
 }
 
 -- I gotta replace config system some day...
 local function cfg(key)
     return polaris and polaris.config and polaris.config[key]
+end
+
+-- I hate GPU palletes
+local function resolveColor(value, paletteIndex, colors)
+    if type(paletteIndex) == "number" and colors[paletteIndex + 1] then
+        return colors[paletteIndex + 1]
+    end
+
+    return value
 end
 
 -- Lol
@@ -181,32 +178,32 @@ function commands.m(t, args)
     while i <= #args do
         local n = args[i]
         if n == 0 then
-            t.fg, t.bg, t.fgp, t.bgp = 7, 0, true, true
-            t.gpu.setForeground(t.fg, true)
-            t.gpu.setBackground(t.bg, true)
+            t.fg, t.bg = t.colors[8], t.colors[1]
+            t.gpu.setForeground(t.fg)
+            t.gpu.setBackground(t.bg)
             t.attributes.echo = true
         elseif n == 8 then
             t.attributes.echo = false
         elseif n == 28 then
             t.attributes.echo = true
         elseif n > 29 and n < 38 then
-            t.fg, t.fgp = n - 30, true
-            t.gpu.setForeground(t.fg, true)
+            t.fg = t.colors[n - 29]
+            t.gpu.setForeground(t.fg)
         elseif n == 39 then
-            t.fg, t.fgp = 7, true
-            t.gpu.setForeground(t.fg, true)
+            t.fg = t.colors[8]
+            t.gpu.setForeground(t.fg)
         elseif n > 39 and n < 48 then
-            t.bg, t.bgp = n - 40, true
-            t.gpu.setBackground(t.bg, true)
+            t.bg = t.colors[n - 39]
+            t.gpu.setBackground(t.bg)
         elseif n == 49 then
-            t.bg, t.bgp = 0, true
-            t.gpu.setBackground(t.bg, true)
+            t.bg = t.colors[1]
+            t.gpu.setBackground(t.bg)
         elseif n > 89 and n < 98 then
-            t.fg, t.fgp = n - 82, true
-            t.gpu.setForeground(t.fg, true)
+            t.fg = t.colors[n - 81]
+            t.gpu.setForeground(t.fg)
         elseif n > 99 and n < 108 then
-            t.bg, t.bgp = n - 92, true
-            t.gpu.setBackground(t.bg, true)
+            t.bg = t.colors[n - 91]
+            t.gpu.setBackground(t.bg)
         elseif n == 38 or n == 48 then
             i = i + 1
             local mode = args[i]
@@ -216,10 +213,10 @@ function commands.m(t, args)
                     i = i + 3
                     local val = (r << 16) + (g << 8) + b
                     if n == 38 then
-                        t.fg, t.fgp = val, false
+                        t.fg = val
                         t.gpu.setForeground(t.fg)
                     else
-                        t.bg, t.bgp = val, false
+                        t.bg = val
                         t.gpu.setBackground(t.bg)
                     end
                 end
@@ -368,12 +365,12 @@ function eraseCursor(t)
 
     t.cursorSaved = nil
 
-    t.gpu.setForeground(saved.fg, saved.fgp)
-    t.gpu.setBackground(saved.bg, saved.bgp)
+    t.gpu.setForeground(saved.fg)
+    t.gpu.setBackground(saved.bg)
     t.gpu.set(saved.x, saved.y, saved.char)
 
-    t.gpu.setForeground(t.fg, t.fgp)
-    t.gpu.setBackground(t.bg, t.bgp)
+    t.gpu.setForeground(t.fg)
+    t.gpu.setBackground(t.bg)
 end
 
 -- Could be simplified I think
@@ -386,31 +383,29 @@ function drawCursor(t)
 
     local c, f, b, pf, pb = t.gpu.get(cur.x, cur.y)
 
-    local savedFg = pf ~= nil and pf or f
-    local savedBg = pb ~= nil and pb or b
-    local savedFgp = pf ~= nil
-    local savedBgp = pb ~= nil
+    local savedFg = resolveColor(f, pf, t.colors)
+    local savedBg = resolveColor(b, pb, t.colors)
 
     local saved = t.cursorSaved
     if saved then
         saved.x, saved.y, saved.char = cur.x, cur.y, c
-        saved.fg, saved.bg, saved.fgp, saved.bgp = savedFg, savedBg, savedFgp, savedBgp
+        saved.fg, saved.bg = savedFg, savedBg
     else
-        t.cursorSaved = { x = cur.x, y = cur.y, char = c, fg = savedFg, bg = savedBg, fgp = savedFgp, bgp = savedBgp }
+        t.cursorSaved = { x = cur.x, y = cur.y, char = c, fg = savedFg, bg = savedBg }
     end
 
     if glyph then
-        t.gpu.setForeground(t.fg, t.fgp)
-        t.gpu.setBackground(t.bg, t.bgp)
+        t.gpu.setForeground(t.fg)
+        t.gpu.setBackground(t.bg)
         t.gpu.set(cur.x, cur.y, glyph)
     else
-        t.gpu.setForeground(savedBg, savedBgp)
-        t.gpu.setBackground(savedFg, savedFgp)
+        t.gpu.setForeground(savedBg)
+        t.gpu.setBackground(savedFg)
         t.gpu.set(cur.x, cur.y, c)
     end
 
-    t.gpu.setForeground(t.fg, t.fgp)
-    t.gpu.setBackground(t.bg, t.bgp)
+    t.gpu.setForeground(t.fg)
+    t.gpu.setBackground(t.bg)
 end
 
 -- Kindly use console driver as this needs a provided gpu.
@@ -436,16 +431,6 @@ function term.new(gpu, disc)
             end
         end
     end
-    local originalColors = {}
-    for i, color in ipairs(colors) do
-        originalColors[i] = color
-    end
-
-    for i = 1, #colors do
-        if gpu.setPaletteColor then
-            gpu.setPaletteColor(i - 1, colors[i])
-        end
-    end
 
     if gpu.setDepth and gpu.maxDepth then
         gpu.setDepth(gpu.maxDepth())
@@ -456,6 +441,8 @@ function term.new(gpu, disc)
         disc = disc,
         attributes = attributes,
         disabled = disabled,
+
+        colors = colors,
 
         inEsc = false,
         escBuf = "",
@@ -475,28 +462,16 @@ function term.new(gpu, disc)
             blinkOn = true,
         },
 
-        fg = 7,
-        bg = 0,
-        fgp = true,
-        bgp = true,
+        fg = colors[8],
+        bg = colors[1],
         cursorSaved = nil,
     }
 
     local originalFg = t.fg
     local originalBg = t.bg
-    local originalFgp = t.fgp
-    local originalBgp = t.bgp
 
-    local function applyColors(colors)
-        for i, color in ipairs(colors) do
-            if t.gpu.setPaletteColor then
-                t.gpu.setPaletteColor(i - 1, color)
-            end
-        end
-    end
-
-    gpu.setForeground(t.fg, true)
-    gpu.setBackground(t.bg, true)
+    gpu.setForeground(t.fg)
+    gpu.setBackground(t.bg)
 
     t.w, t.h = gpu.getResolution()
 
@@ -596,17 +571,13 @@ function term.new(gpu, disc)
 
     function t:resetColors()
         -- Restore pallete
-        applyColors(originalColors)
-
         -- Restore fg/bg
         self.fg = originalFg
         self.bg = originalBg
-        self.fgp = originalFgp
-        self.bgp = originalBgp
 
         -- Apply
-        self.gpu.setForeground(self.fg, self.fgp)
-        self.gpu.setBackground(self.bg, self.bgp)
+        self.gpu.setForeground(self.fg)
+        self.gpu.setBackground(self.bg)
     end
 
     -- Finally supported

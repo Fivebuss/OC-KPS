@@ -18,7 +18,7 @@ else
 end
 
 local text = string.format(
-    "ksh v%s\n%s\n%s, %.1fK system\nReached ksh in %s",
+    "ksh v%s\n%s\n%s, %.1fK system\nStarted ksh in %s",
     version,
     "",
     _VERSION,
@@ -28,4 +28,4 @@ local text = string.format(
 
 local motd = condraw.box(text)
 
-io.writeln("\27[38;2;255;255;255m" .. motd .. "\27[0m")
+io.writeln("\27[97m" .. motd .. "\27[0m")
