@@ -13,11 +13,12 @@ local rowMajor = false
 local singleColumn = false
 
 -- Il support just some basic stuff to justify getopt existing
-local opts = "madrRx1"
+local opts = "madrRx1H"
 local longopts = {
     all = "a",
     directory = "d",
     recursive = "R",
+    help = "H",
 }
 
 for opt, val in getopt(args or {}, opts, longopts) do
@@ -35,6 +36,17 @@ for opt, val in getopt(args or {}, opts, longopts) do
         rowMajor = true
     elseif opt == "1" then
         singleColumn = true
+    elseif opt == "H" then
+        io.writeln("Usage: ls [-a] [-d] [-m] [-r] [-R] [-x] [-1] DIR...")
+        io.writeln("Lists contents of DIR(s)")
+        io.writeln("  -a/--all, shows all entries including hidden files")
+        io.writeln("  -d/--directory, lists directories instead of contents")
+        io.writeln("  -m, comma-seperated format")
+        io.writeln("  -r, reverses the output order")
+        io.writeln("  -R, recursive (May be slow!)")
+        io.writeln("  -x, row-first order")
+        io.writeln("  -1, shows one entry per line")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("ls: invalid option -- '" .. val .. "'")
         os.exit(1)

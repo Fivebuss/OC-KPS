@@ -1,4 +1,5 @@
 -- /bin/colors.lua
+local args = {...}
 local names = {
     "Black",
     "Red",
@@ -17,6 +18,15 @@ local names = {
     "Bright Cyan",
     "Bright White",
 }
+
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: colors")
+        io.writeln("Displays the 8 foreground and background standard colors")
+        io.writeln("There isn't anything else to it")
+        os.exit(0)
+    end
+end
 
 for i = 0, 15 do
     local code = i < 8 and (30 + i) or (90 + i - 8)

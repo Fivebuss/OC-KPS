@@ -5,6 +5,17 @@ local filesystem = require("filesystem")
 
 local args = { ... }
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: mount [-b] SOURCE TARGET")
+        io.writeln("Mounts SOURCE to TARGET")
+        io.writeln("SOURCE must be a filesystem component address or an existing mount path")
+        io.writeln("TARGET must be a path. It does not have to exist and will replace existing!")
+        io.writeln("  -b, bind mounts a folder to another")
+        os.exit(0)
+    end
+end
+
 if #args == 2 then
     local address = args[1]
     local path = args[2]

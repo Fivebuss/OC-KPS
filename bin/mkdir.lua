@@ -14,7 +14,7 @@ for _, arg in ipairs(args) do
                 verbose = true
             else
                 io.writelnError("mkdir: invalid option -- '" .. char .. "'")
-                io.writelnError("Usage: mkdir [-v] <path>...")
+                io.writelnError("Usage: mkdir [-v] PATH...")
                 os.exit(1)
             end
         end
@@ -25,7 +25,7 @@ end
 
 if #paths == 0 then
     io.writelnError("mkdir: missing operand")
-    io.writelnError("Usage: mkdir [-v] <path>...")
+    io.writelnError("Usage: mkdir [-v] PATH...")
     os.exit(1)
 end
 

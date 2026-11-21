@@ -3,36 +3,45 @@
 -- Thankfully filesystem library is alot better making this smaller
 
 local filesystem     = require("filesystem")
+local getopt         = require("ksh.getopt")
 
 local force          = false
 local recursive      = false
 local noPreserveRoot = false
-local ignoreOptions  = false
 local targets        = {}
 
-for _, a in ipairs(args or {}) do
-    if not ignoreOptions and a == "--" then
-        ignoreOptions = true
-    elseif not ignoreOptions and a == "-f" then
+local arglist = args or {}
+
+for opt, val in getopt(arglist, "frRPH", { ["recursive"] = "r", ["no-preserve-root"] = "P", ["help"] = "H" }) do
+    if opt == "f" then
         force = true
-    elseif not ignoreOptions and (a == "-r" or a == "-R" or a == "--recursive") then
+    elseif opt == "r" or opt == "R" then
         recursive = true
-    elseif not ignoreOptions and (a == "-rf" or a == "-fr") then
-        force = true; recursive = true
-    elseif not ignoreOptions and a == "--no-preserve-root" then
+    elseif opt == "P" then
         noPreserveRoot = true
-    elseif not ignoreOptions and a:sub(1, 1) == "-" then
-        io.writelnError("rm: invalid option: " .. a)
+    elseif opt == "H" then
+        io.writeln("Usage: rm [-f] [-r] [--no-preserve-root] FILE...")
+        io.writeln("Removes FILE(s) or folders")
+        io.writeln("  -f force removal")
+        io.writeln("  -r, -R remove directories")
+        io.writeln("  --no-preserve-root allows removing '/'")
+        os.exit(0)
+    elseif opt == "?" then
+        io.writelnError("rm: invalid option -- '" .. tostring(val) .. "'")
         io.writelnError("usage: rm [-f] [-r] [--no-preserve-root] <file...>")
         return
-    else
-        table.insert(targets, console.stripQuotes(a))
     end
+end
+
+local start = 1
+if arglist[1] == "--" then start = 2 end
+for i = start, #arglist do
+    table.insert(targets, console.stripQuotes(arglist[i]))
 end
 
 if #targets == 0 then
     io.writelnError("rm: missing operand")
-    io.writelnError("usage: rm [-f] [-r] [--no-preserve-root] <file...>")
+    io.writelnError("usage: rm [-f] [-r] [--no-preserve-root] FILE...")
     return
 end
 
@@ -51,7 +60,7 @@ local function needsForce(path)
     return false
 end
 
-local DRY_RUN = false
+local DRY_RUN = true
 
 for _, rawTarget in ipairs(targets) do
     local full = filesystem.canonical(console.resolvePath(console.currPath(), rawTarget))

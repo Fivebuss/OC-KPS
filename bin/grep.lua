@@ -20,6 +20,12 @@ local printNames = false
 local onlyMatching = false  -- -o
 local extendedRegex = false -- -E we will just cheat
 
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
+
 -- Table with patterns to check for
 local patternList = {}
 
@@ -64,7 +70,7 @@ if #args < 1 then
     os.exit(2)
 end
 
-for opt, arg in getopt(args, "EFce:f:ilnqsvxo") do
+for opt, arg in getopt(args, "EFce:f:ilnqsvxoH", { ["help"] = "H" }) do
     if opt == 'F' then
         plain = true
     elseif opt == 'c' then
@@ -103,6 +109,13 @@ for opt, arg in getopt(args, "EFce:f:ilnqsvxo") do
         onlyMatching = true
     elseif opt == 'E' then
         extendedRegex = true
+    elseif opt == 'H' then
+        printUsage()
+        io.writeln("There are too many options to bother listing")
+        io.writeln("However, it works as-expected to POSIX grep")
+        io.writeln("Except extended regex support is unavailable!")
+        io.writeln("Ported from wobbo's grep")
+        os.exit(0)
     elseif opt == '?' then
         printUsage()
         os.exit(2)
@@ -241,9 +254,8 @@ local matchFile = nil
 local lineCount = 0
 
 for line, file, ln in readLines() do
-    local sig = coroutine.yield()
-    if sig == "INT" then os.exit(130) end
-    if process.isSignal(sig) then break end
+    coroutine.yield()
+    if stopLoop then os.exit(130) end
 
     if not line then
         if file ~= "end of file" then os.exit(2) end

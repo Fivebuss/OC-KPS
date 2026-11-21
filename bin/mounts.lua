@@ -9,6 +9,15 @@ local MAX_DEPTH = 5
 
 local mode = "mounts"
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: mounts [-m]")
+        io.writeln("Displays current mounts")
+        io.writeln("  -m, display the mtab instead to 5 layers")
+        os.exit(0)
+    end
+end
+
 for _, arg in ipairs(args) do
     if arg == "-m" then
         mode = "mtab"

@@ -15,9 +15,10 @@ local options = {
 
 local filters = {}
 
-for opt, value in getopt(args, "la:n:", {
+for opt, value in getopt(args, "la:n:H", {
     all = "a",
-    limit = "n"
+    limit = "n",
+    help = "H"
 }) do
     if opt == "l" then
         options.l = true
@@ -25,6 +26,13 @@ for opt, value in getopt(args, "la:n:", {
         options.all = true
     elseif opt == "n" then
         options.limit = tonumber(value)
+    elseif opt == "H" then
+        io.writeln("Usage: lshw [-l] [-a] [-n N]")
+        io.writeln("Displays component info")
+        io.writeln("  -l, lists methods of each component")
+        io.writeln("  -a/--all, shows all info of a component")
+        io.writeln("  -n N/--limit N, limits number of components displayed")
+        os.exit(0)
     end
 end
 

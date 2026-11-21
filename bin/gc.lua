@@ -1,9 +1,19 @@
 -- /bin/gc.lua
 -- Borrowed from openOS
 local event = require("event")
+local args = {...}
 local total = computer.totalMemory()
 local max = 0
 max = math.max(max, computer.freeMemory())
+
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: gc")
+        io.writeln("Runs GC then displays memory information")
+        io.writeln("This may not be the actual free memory!")
+        os.exit(0)
+    end
+end
 
 io.write(string.format("Triggering GC\nPre--:\nTotal%12d\nUsed%13d\nFree%13d\n", total, total - max, max))
 

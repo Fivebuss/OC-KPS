@@ -7,14 +7,25 @@ local recursive = false
 local force = false
 local args = { ... }
 
+process.self().setHandle(process.SIG.INT, function()
+    os.exit(130)
+end)
+
 -- You get -i as usual, -R and -f to go through. Be happy
-for opt, val in getopt(args, "iRrf", {}) do
+for opt, val in getopt(args, "iRrfH", { ["help"] = "H" }) do
     if opt == "i" then
         interactive = true
     elseif opt == "R" or opt == "r" then
         recursive = true
     elseif opt == "f" then
         force = true
+    elseif opt == "H" then
+        io.writeln("Usage: cp [-i] [-r] [-f] FILE... DEST")
+        io.writeln("Copies FILE(s) over to a target destination\n")
+        io.writeln("  -r copy directories")
+        io.writeln("  -i interactive, ask when copying")
+        io.writeln("  -f force, overwrite without asking")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("cp: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
@@ -60,6 +71,7 @@ local function copyRecursive(src, dst)
                 return nil, reason
             end
         end
+
         return true
     else
         local shouldCopy = true
@@ -76,6 +88,7 @@ local function copyRecursive(src, dst)
         if shouldCopy then
             return filesystem.copy(src, dst)
         end
+
         return true
     end
 end
@@ -101,8 +114,5 @@ for _, source in ipairs(sources) do
             end
         end
     end
-
-    if coroutine.yield() == "INT" then
-        os.exit(130)
-    end
+    coroutine.yield()
 end

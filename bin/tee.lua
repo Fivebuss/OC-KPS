@@ -4,6 +4,25 @@ local filesystem = require("filesystem")
 local append = false
 local ignoreInt = false
 local files = {}
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    if not ignoreInt then
+        stopLoop = true
+    end
+end)
+
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: tee [-a] [-i] [--] [FILE...]")
+        io.writeln("Copies stdin to stdout and FILE(s)")
+        io.writeln("If no FILE(s) are given, reads and writes to stdout")
+        io.writeln("  -a, appends instead of overwriting FILE(s)")
+        io.writeln("  -i, ignores SIGINT")
+        io.writeln("tee -- ; skips option parsing so files can begin with -")
+        os.exit(0)
+    end
+end
 
 local i = 1
 while i <= #args do
@@ -52,46 +71,24 @@ local function writeAll(chunk)
 end
 
 local function chunkRead()
-    while true do
+    while not stopLoop do
         local chunk = io.stdin:read(2048)
         if not chunk then break end
 
-        if chunk == "INT" and not ignoreInt then
-            os.exit(130)
-        end
+        writeAll(chunk)
 
-        if process.isSignal(chunk) then
-            if not ignoreInt then break end
-        else
-            writeAll(chunk)
-        end
-
-        local sig = coroutine.yield()
-        if sig == "INT" and not ignoreInt then
-            os.exit(130)
-        end
+        coroutine.yield()
     end
 end
 
 local function lineRead()
-    while true do
+    while not stopLoop do
         local line, _, noNewline = io.read("l")
         if not line then break end
 
-        if line == "INT" and not ignoreInt then
-            os.exit(130)
-        end
+        writeAll(noNewline and line or (line .. "\n"))
 
-        if process.isSignal(line) then
-            if not ignoreInt then break end
-        else
-            writeAll(noNewline and line or (line .. "\n"))
-        end
-
-        local sig = coroutine.yield()
-        if sig == "INT" and not ignoreInt then
-            os.exit(130)
-        end
+        coroutine.yield()
     end
 end
 
@@ -105,4 +102,8 @@ end
 
 for _, h in ipairs(handles) do
     h:close()
+end
+
+if stopLoop then
+    os.exit(130)
 end

@@ -19,6 +19,13 @@ local function resolveCommand(name)
     return nil
 end
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("This util will probably be replaced later, dont use it")
+        os.exit(0)
+    end
+end
+
 local i = 1
 local clearFirst = false
 

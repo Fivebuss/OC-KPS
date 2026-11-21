@@ -19,6 +19,14 @@ local sformat, tconcat = string.format, table.concat
 
 local args = args or {}
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: kedit FILE")
+        io.writeln("Edits a file! Based on cynosure's TLE")
+        os.exit(0)
+    end
+end
+
 -- State
 local buffer = { "" }
 local curLine = 1
@@ -30,6 +38,12 @@ local pendingQuit = false
 local dirty = true
 local findMode = false
 local findPat = ""
+
+local interrupted = false
+
+process.self().setHandle(process.SIG.INT, function()
+    interrupted = true
+end)
 
 -- Thank goodness for _G.ctty
 if not ctty then
@@ -125,8 +139,8 @@ local function loadFile()
         count = count + 1
         chunks[count] = chunk
 
-        local sig = coroutine.yield()
-        if process.isSignal(sig) then
+        coroutine.yield()
+        if interrupted then
             handle:close()
             restoreTerminal()
             return false
@@ -698,8 +712,8 @@ end
 if buffer == nil then buffer = { "" } end
 
 while true do
-    local sig = coroutine.yield()
-    if process.isSignal(sig) and sig == "INT" then
+    coroutine.yield()
+    if interrupted then
         doQuit()
         return
     end

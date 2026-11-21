@@ -1927,6 +1927,16 @@ end
 
 -- I just support luas. Who cares about security when you can just run it as code...
 builtins["date"] = function(args, stdin, stdout, stderr)
+    for _, a in ipairs(args or {}) do
+        if a == "--help" then
+            stdout:write("Usage: date [FORMAT] [EPOCH SECONDS]\n")
+            stdout:write("Display the current date and time\n")
+            stdout:write("  FORMAT  lua string format (default: \"%a %b %d %I:%M:%S %p IGST %Y\")\n")
+            stdout:write("  EPOCH   optional, seconds to format\n")
+            st().lastExitCode = 0
+            return
+        end
+    end
     if #args == 0 then
         stdout:write(os.date("%a %b %d %I:%M:%S %p" .. " IGST " .. "%Y"), "\n")
     else
@@ -2398,6 +2408,17 @@ end
 
 
 builtins["read"] = function(args, stdin, stdout, stderr)
+    for _, a in ipairs(args or {}) do
+        if a == "--help" then
+            stdout:write("Usage: read [-r] [-s] [NAME..]\n")
+            stdout:write("Read a line from stdin into variable(s)\n")
+            stdout:write("  -r  do not treat backslashes as escape characters\n")
+            stdout:write("  -s  silent mode (dont echo)\n")
+            stdout:write("  [NAME] Defaults to $REPLY\n")
+            st().lastExitCode = 0
+            return
+        end
+    end
     local raw = false
     local silent = false
     local varNames = {}
@@ -2531,6 +2552,15 @@ end
 
 -- Oh boy! It exists!
 builtins["jobs"] = function(args, stdin, stdout, stderr)
+    for _, a in ipairs(args or {}) do
+        if a == "--help" then
+            stdout:write("Usage: jobs\n")
+            stdout:write("Displays ksh job information")
+            stdout:Write("The last finished job status will also be here")
+            st().lastExitCode = 0
+            return
+        end
+    end
     local jobs = st().asyncJobs
     local any = false
     for i = #jobs, 1, -1 do
@@ -3333,6 +3363,13 @@ builtins["sh"] = function(args, stdin, stdout, stderr)
         st().lastExitCode = 1
         return
     end
+    if args[1] == "--help" then
+        stdout:write("Usage: sh FILE\n")
+        stdout:write("Runs a shell script file\n")
+        st().lastExitCode = 0
+        return
+    end
+
     fatalScriptError = false
 
     st().lastExitCode = runScriptSubshell(args[1], args)

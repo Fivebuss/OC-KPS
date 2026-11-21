@@ -6,10 +6,17 @@ local getopt = require("ksh.getopt")
 local humanReadable = false
 local siUnits = false
 
-local opts = "hi" -- hello back
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
+
+local opts = "hiH"
 local longopts = {
     ["human-readable"] = "h",
     ["si"]             = "i",
+    ["help"]           = "H",
 }
 
 for opt, val in getopt(args or {}, opts, longopts) do
@@ -17,6 +24,12 @@ for opt, val in getopt(args or {}, opts, longopts) do
         humanReadable = true
     elseif opt == "i" then
         siUnits = true
+    elseif opt == "H" then
+        io.writeln("Usage: df [-h] [-i] MOUNTS...")
+        io.writeln("Shows disk usage info for things mounted at MOUNT(s)")
+        io.writeln("  -h human-readable format, like M")
+        io.writeln("  -i uses SI units for -h")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("df: invalid option -- '" .. val .. "'")
         os.exit(1)
@@ -103,7 +116,8 @@ for proxy, path in pairs(mounts) do
         path,
     }
 
-    if coroutine.yield() == "INT" then
+    coroutine.yield()
+    if stopLoop then
         os.exit(130)
     end
 end

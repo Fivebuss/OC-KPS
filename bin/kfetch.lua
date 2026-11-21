@@ -35,13 +35,20 @@ local showLogo = true
 local smallLogo = false
 
 -- logo?
-for opt, val in getopt(args or {}, "vls", { verbose = "v", ["no-logo"] = "l", small = "s" }) do
+for opt, val in getopt(args or {}, "vlsH", { verbose = "v", ["no-logo"] = "l", small = "s", ["help"] = "H" }) do
     if opt == "v" then
         verbose = true
     elseif opt == "l" then
         showLogo = false
     elseif opt == "s" then
         smallLogo = true
+    elseif opt == "H" then
+        io.writeln("Usage: kfetch [-l] [-s] [-v]")
+        io.writeln("Neofetch ripoff :)")
+        io.writeln("  -l, does not show logo")
+        io.writeln("  -s, shows small logo")
+        io.writeln("  -v, verbose")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("kfetch: unrecognized option '" .. tostring(val) .. "'")
     end

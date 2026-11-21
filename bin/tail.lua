@@ -38,6 +38,18 @@ local function setMode(option, value)
     end
 end
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: tail [-n N] [-c N] [FILE...]")
+        io.writeln("Outputs the last N bytes or lines of FILE(s)")
+        io.writeln("If no FILE is given, or if FILE is -, in which case it will tail until EOF")
+        io.writeln("  -n N, number of lines to output")
+        io.writeln("  -c N, number of bytes to output")
+        io.writeln("tail -- ; skips parsing options entirely (So filenames can start with -)")
+        os.exit(0)
+    end
+end
+
 local i = 1
 
 while i <= #args do
@@ -60,7 +72,7 @@ while i <= #args do
     elseif a:sub(1, 2) == "-n" or a:sub(1, 2) == "-c" then
         local option = a:sub(1, 2)
         setMode(option, a:sub(3))
-    elseif a:sub(1, 1) == "-" then
+    elseif a:sub(1, 1) == "-" and a ~= "-" then
         io.writelnError("tail: unknown option: " .. a)
         os.exit(1)
     else

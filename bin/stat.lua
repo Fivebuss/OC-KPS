@@ -8,11 +8,12 @@ local terse      = false
 local fsMode     = false
 local followLink = false
 
-local opts       = "tfL"
+local opts       = "tfLH"
 local longopts   = {
     ["terse"]       = "t",
     ["file-system"] = "f",
     ["dereference"] = "L", -- aka follow symlinks
+    ["help"]        = "H",
 }
 
 for opt, val in getopt(args or {}, opts, longopts) do
@@ -22,6 +23,13 @@ for opt, val in getopt(args or {}, opts, longopts) do
         fsMode = true
     elseif opt == "L" then
         followLink = true
+    elseif opt == "H" then
+        io.writeln("Usage [-t] [-f] [-L] FILE...")
+        io.writeln("Displays information about FILE(s)")
+        io.writeln("  -t/--terse, displays space seperated and compact information")
+        io.writeln("  -f/--file-system, displays filesystem info")
+        io.writeln("  -L/--dereference, follows symlinks")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("stat: invalid option -- '" .. val .. "'")
         os.exit(1)

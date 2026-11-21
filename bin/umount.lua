@@ -4,9 +4,17 @@ local filesystem = require("filesystem")
 
 local args = { ... }
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: umount PATH/ADDRESS")
+        io.writeln("Unmounts PATH or component ADDRESS")
+        os.exit(0)
+    end
+end
+
 if #args ~= 1 then
     io.writelnError("umount: invalid arguments")
-    io.writelnError("Usage: umount (path or address")
+    io.writelnError("Usage: umount PATH/ADDRESS")
     os.exit(1)
 end
 

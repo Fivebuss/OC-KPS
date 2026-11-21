@@ -1,22 +1,27 @@
 -- /bin/du.lua
 
-local filesystem    = require("filesystem")
-local getopt        = require("ksh.getopt")
+local filesystem = require("filesystem")
+local getopt     = require("ksh.getopt")
+
+process.self().setHandle(process.SIG.INT, function()
+    os.exit(130)
+end)
 
 local humanReadable = false
 local summarize     = false
-local showHidden    = false -- -o, show hidden. Its seperate purely for me because of .git folder
+local showHidden    = true -- -o, show hidden. no longer needed for me
 local countFiles    = false -- -a
 local grandTotal    = false -- -c the total only
 local maxDepth      = nil   -- -d depth
 
-local opts          = "hsoacd:"
+local opts          = "hsoacd:H"
 local longopts      = {
     ["human-readable"] = "h",
     ["summarize"]      = "s",
     ["all"]            = "a",
     ["count"]          = "c",
     ["depth"]          = "d",
+    ["help"]           = "H",
 }
 
 for opt, val in getopt(args or {}, opts, longopts) do
@@ -36,6 +41,16 @@ for opt, val in getopt(args or {}, opts, longopts) do
             io.writelnError("du: invalid argument to -d: '" .. tostring(val) .. "'")
             os.exit(1)
         end
+    elseif opt == "H" then
+        io.writeln("Usage: du [-h] [-s] [-o] [-a] [-c] [-d N] PATH...")
+        io.writeln("Shows disk usage of PATH(s)")
+        io.writeln("  -h/--human-readable, like M")
+        io.writeln("  -s/--sumarize, shows just the total size of everything (Same as -d 0)")
+        io.writeln("  -o, do not include hidden files that begin with .")
+        io.writeln("  -a/--all, displays file sizes as well")
+        io.writeln("  -c/--count, shows a grand total at the end")
+        io.writeln("  -d N//--depth N, how deep to output contents")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("du: invalid option -- '" .. val .. "'")
         os.exit(1)
@@ -68,6 +83,7 @@ local function formatSize(size)
         unit = unit + 1
         size = size / power
     end
+
     return math.floor(size * 10) / 10 .. suffixes[unit]
 end
 
@@ -79,6 +95,7 @@ local function addTrailingSlash(path)
     if path:sub(-1) ~= "/" then
         return path .. "/"
     end
+
     return path
 end
 
@@ -109,9 +126,7 @@ local function visit(rpath, depth)
                     end
                 end
             end
-            if coroutine.yield() == "INT" then
-                os.exit(130)
-            end
+            coroutine.yield()
         end
 
         -- ./
@@ -150,9 +165,7 @@ for _, targetStr in ipairs(targets) do
         combined = combined + size
     end
 
-    if coroutine.yield() == "INT" then
-        os.exit(130)
-    end
+    coroutine.yield()
 end
 
 if grandTotal then

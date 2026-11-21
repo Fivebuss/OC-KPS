@@ -7,6 +7,15 @@ local filesystem = require("filesystem")
 
 local args = { ... }
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: reset")
+        io.writeln("Resets the terminal to default settings")
+        io.writeln("And resets readline")
+        os.exit(0)
+    end
+end
+
 -- Support /dev/tty<whatever>
 local ttyDev = nil
 local argStart = 1

@@ -3,6 +3,15 @@
 local args = { ... }
 local users = require("users")
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: rmuser [-d] USER")
+        io.writeln("Removes a USER and optionally their /home/USER")
+        io.writeln("  -d, deletes /home/USER")
+        os.exit(0)
+    end
+end
+
 if #args > 2 or #args == 0 then
     io.writelnError("Usage: rmuser [-d delete-home] <username>")
     os.exit(1)

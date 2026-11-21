@@ -4,8 +4,17 @@
 local args = {...}
 local users = require("users")
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: adduser USER")
+        io.writeln("Adds a user, of course")
+        io.writeln("  USER must be A-Z! Or weirdness may happen")
+        os.exit(0)
+    end
+end
+
 if #args ~= 1 then
-    io.writelnError("Usage: adduser <username>")
+    io.writelnError("Usage: adduser USER")
     os.exit(1)
 end
 

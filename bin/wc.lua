@@ -10,8 +10,14 @@ local showWords = false
 
 local args = { ... }
 
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
+
 -- -c bytes -m chars -w words -l lines
-for opt, val in getopt(args, "lcmw", {}) do
+for opt, val in getopt(args, "lcmwH", { ["help"] = "H" }) do
     if opt == "l" then
         showLines = true
     elseif opt == "c" then
@@ -20,6 +26,16 @@ for opt, val in getopt(args, "lcmw", {}) do
         showChars = true
     elseif opt == "w" then
         showWords = true
+    elseif opt == "H" then
+        io.writeln("Usage: wc [-l] [-c] [-m] [-w] [FILE...]")
+        io.writeln("Counts lines, bytes, characters, or words from stdin or FILE(s)")
+        io.writeln("If no FILE is supplied, or FILE(s) is -, reads from stdin")
+        io.writeln("  -l, count lines")
+        io.writeln("  -c, count bytes")
+        io.writeln("  -m, count characters")
+        io.writeln("  -w, count words")
+        io.writeln("Defaults to -clw")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("wc: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
@@ -68,12 +84,7 @@ local function processStdin()
         local chunkCount = 0
         local chunk = io.stdin:read(chunkSize)
 
-        while chunk do
-            if chunk == "INT" then
-                os.exit(130)
-            end
-            if process.isSignal(chunk) then break end
-
+        while chunk and not stopLoop do
             local lines, words, bytes, chars = countData(chunk)
             totalLines = totalLines + lines
             totalWords = totalWords + words
@@ -82,24 +93,16 @@ local function processStdin()
 
             chunkCount = chunkCount + 1
             if chunkCount % 4 == 0 then
-                local sig = coroutine.yield()
-                if sig == "INT" then
-                    os.exit(130)
-                end
+                coroutine.yield()
             end
 
             chunk = io.stdin:read(chunkSize)
         end
     else
         local lineCount = 0
-        while true do
+        while not stopLoop do
             local line, _, noNewline = io.read("l")
             if not line then break end
-
-            if line == "INT" then
-                os.exit(130)
-            end
-            if process.isSignal(line) then break end
 
             local data = noNewline and line or (line .. "\n")
             local lines, words, bytes, chars = countData(data)
@@ -110,10 +113,7 @@ local function processStdin()
 
             lineCount = lineCount + 1
             if lineCount % 64 == 0 then
-                local sig = coroutine.yield()
-                if sig == "INT" then
-                    os.exit(130)
-                end
+                coroutine.yield()
             end
         end
     end
@@ -148,7 +148,7 @@ local function processFile(target)
     local chunkCount = 0
     local chunk = handle:read(chunkSize)
 
-    while chunk do
+    while chunk and not stopLoop do
         local lines, words, bytes, chars = countData(chunk)
         totalLines = totalLines + lines
         totalWords = totalWords + words
@@ -157,10 +157,7 @@ local function processFile(target)
 
         chunkCount = chunkCount + 1
         if chunkCount % 4 == 0 then
-            local sig = coroutine.yield()
-            if sig == "INT" then
-                os.exit(130)
-            end
+            coroutine.yield()
         end
 
         chunk = handle:read(chunkSize)
@@ -187,6 +184,10 @@ for _, target in ipairs(targets) do
         lines, words, bytes, chars = processFile(target)
     end
 
+    if stopLoop then
+        os.exit(130)
+    end
+
     if lines then
         local output = ""
         if showLines then output = output .. string.format("%8d", lines) end
@@ -205,10 +206,11 @@ for _, target in ipairs(targets) do
         fileCount = fileCount + 1
     end
 
-    local sig = coroutine.yield()
-    if sig == "INT" then
-        os.exit(130)
-    end
+    coroutine.yield()
+end
+
+if stopLoop then
+    os.exit(130)
 end
 
 if fileCount > 1 then

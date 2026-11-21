@@ -67,6 +67,51 @@ local function hasFlag(flags, name)
 end
 
 -- Parse key=value arguments
+for _, a in ipairs(args) do
+    if a == "--help" then
+        -- gross. I probably shouldve used an escaped string
+        io.writeln(
+            "Usage: dd [if=FILE] [of=FILE] [bs=N] [ibs=N] [obs=N] [count=N] [skip=N] [seek=N] [iflag=FLAGS] [oflag=FLAGS] [status=LEVEL]")
+        io.writeln("Copy data from an input file or stdin to an output file or stdout")
+        io.writeln("  if=FILE       Read from FILE (defaults to stdin)")
+        io.writeln("  of=FILE       Write to FILE (defaults to stdout)")
+        io.writeln("  bs=N          Set both input and output block sizes")
+        io.writeln("  ibs=N         Input block size (default: 512)")
+        io.writeln("  obs=N         Output block size (default: 512)")
+        io.writeln("  count=N       Copy at most N input blocks")
+        io.writeln("  skip=N        Skip N input blocks before copying")
+        io.writeln("  iseek=N       Same as skip=N")
+        io.writeln("  seek=N        Skip N output blocks before writing")
+        io.writeln("  oseek=N       Same as seek=N")
+        io.writeln("  iflag=FLAGS   Comma-separated input flags")
+        io.writeln("  oflag=FLAGS   Comma-separated output flags")
+        io.writeln("  status=LEVEL  Set output status level (default: none)")
+        io.writeln("")
+        io.writeln("Flags:")
+        io.writeln("  direct        Use filesystem.open instead of io.open, unbuffered (if=direct of=direct)")
+        io.writeln("  append        Append instead of overwriting (oflag only)")
+        io.writeln("")
+        io.writeln("Status levels:")
+        io.writeln("  none          No transfer statistics (default)")
+        io.writeln("  noxfer        Ignore transfer statistics")
+        io.writeln("  progress      Print transfer statistics after copying")
+        io.writeln("")
+        io.writeln("Size suffixes:")
+        io.writeln("  c             1 byte")
+        io.writeln("  w             2 bytes")
+        io.writeln("  b             512 bytes")
+        io.writeln("  kB, MB, GB     Power of 1000")
+        io.writeln("  K, M, G, T     Power of 1024")
+        io.writeln("  KiB, MiB, GiB  Power of 1024")
+        io.writeln("  TiB, PiB, EiB  Power of 1024")
+        io.writeln("  ZB, YB, RB, QB Power of 1000")
+        io.writeln("  Z, Y, R, Q     Power of 1024")
+        io.writeln("\nNote about direct mode")
+        io.writeln("Skipping io.open may be faster only if a large block size and small count, and alot of data")
+        os.exit(0)
+    end
+end
+
 local opts = {}
 for _, arg in ipairs(args) do
     local k, v = arg:match("^([^=]+)=(.*)$")

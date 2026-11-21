@@ -6,14 +6,32 @@ local quiet = false
 local printRomFlag = false
 local saveRomFlag = false
 
-local shortSpec = "qlr"
+local shortSpec = "qlrH"
 local args = {...}
+
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
+
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: flash [-qlr] [<bios.lua>] [label]")
+        io.writeln("  q: quiet mode, don't ask questions.")
+        io.writeln("  l: print current contents of installed EEPROM.")
+        io.writeln("  r: save the current contents of installed EEPROM to file.")
+        io.writeln("Ported from openOS!")
+        os.exit(0)
+    end
+end
 
 if #args < 1 and not printRomFlag then
     io.writeln("Usage: flash [-qlr] [<bios.lua>] [label]")
-    io.writeln(" q: quiet mode, don't ask questions.")
-    io.writeln(" l: print current contents of installed EEPROM.")
-    io.writeln(" r: save the current contents of installed EEPROM to file.")
+    io.writeln("  q: quiet mode, don't ask questions.")
+    io.writeln("  l: print current contents of installed EEPROM.")
+    io.writeln("  r: save the current contents of installed EEPROM to file.")
+    io.writeln("Ported from openOS!")
     os.exit(1)
 end
 
@@ -39,7 +57,7 @@ local function chunkRead(reader)
     local count = 0
     local chunk = reader:read(chunkSize)
 
-    while chunk do
+    while not stopLoop and chunk do
         local ok = io.write(chunk)
         if not ok then break end
 
@@ -47,11 +65,7 @@ local function chunkRead(reader)
 
         count = count + 1
         if count % 4 == 0 then
-            local sig = coroutine.yield()
-            if sig == "INT" then
-                os.exit(130)
-            end
-            if sig and process.isSignal(sig) then break end
+            coroutine.yield()
         end
 
         chunk = reader:read(chunkSize)
@@ -60,19 +74,17 @@ end
 
 local function readConfirm(prompt)
     io.writeln(prompt)
-    while true do
+    while not stopLoop do
         local line, _, noNewline = io.read("l")
         if not line then return false end
-        if line == "INT" then
-            os.exit(130)
-        end
         if process.isSignal(line) then return false end
-        local sig = coroutine.yield()
-        if sig == "INT" then
+        coroutine.yield()
+        if stopLoop then
             os.exit(130)
         end
         if line:lower():sub(1, 1) == "y" then return true end
     end
+    os.exit(130)
 end
 
 local function printRom()
@@ -176,14 +188,11 @@ local function writeRom()
     if not quiet and not label then
         io.writeln("Enter new label for this EEPROM. Leave input blank to leave the label unchanged.")
         local line, _, noNewline = io.read("l")
-        if line == "INT" then
-            os.exit(130)
-        end
         if line and not process.isSignal(line) then
             label = line
         end
-        local sig = coroutine.yield()
-        if sig == "INT" then
+        coroutine.yield()
+        if stopLoop then
             os.exit(130)
         end
     end
@@ -213,6 +222,10 @@ elseif saveRomFlag then
     result, reason = saveRom()
 else
     result, reason = writeRom()
+end
+
+if stopLoop then
+    os.exit(130)
 end
 
 if reason then

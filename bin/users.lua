@@ -4,6 +4,15 @@
 local args = {...}
 local users = require("users")
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: users [-i]")
+        io.writeln("Displays users logged in")
+        io.writeln("  -i, shows UIDs")
+        os.exit(0)
+    end
+end
+
 local numeric = false
 
 for _, arg in ipairs(args) do

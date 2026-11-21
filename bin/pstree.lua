@@ -4,6 +4,8 @@
 
 local getopt = require("ksh.getopt")
 
+local HANDLED_SIGNALS = { "HUP", "INT", "QUIT", "CHLD", "CONT", "TSTP", "TTIN", "TTOU" }
+
 local GROUP_NAMES = {}
 for name, gid in pairs(process.GID) do
     if type(gid) == "number" then
@@ -51,23 +53,35 @@ local function fmtIo(pid)
 end
 
 local all = false
+local showAll = false
 local showIo = false
+local showHandlers = false
 local ascii = false
 local verbose = false
 
-local shortSpec = "aitV"
-local longSpec = { all = "a", io = "i", ascii = "t", verbose = "verbose" }
+local currentUid = process.self() and process.self().uid or nil
+
+local shortSpec = "aixstVH"
+local longSpec = { all = "a", io = "i", ascii = "t", signals = "s", verbose = "verbose" }
 longSpec.verbose = "V"
+longSpec.help = "H"
 
 for opt, val in getopt(args, shortSpec, longSpec) do
     if opt == "a" then
         all = true
+    elseif opt == "x" then
+        showAll = true
     elseif opt == "i" then
         showIo = true
+    elseif opt == "s" then
+        showHandlers = true
     elseif opt == "t" then
         ascii = true
     elseif opt == "V" then
         verbose = true
+    elseif opt == "H" then
+        io.writeln("pstree is pending a rewrite")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("pstree: unrecognized option '" .. tostring(val) .. "'")
     elseif opt == ":" then
@@ -86,7 +100,15 @@ else
     BRANCH, LAST, PIPE, SPACE = "├─ ", "└─ ", "│  ", "   "
 end
 
-local entries = process.list()
+local rawEntries = process.list()
+local entries = {}
+for _, e in ipairs(rawEntries) do
+    local userOk = all or currentUid == nil or e.uid == currentUid
+    local ttyOk = showAll or e.ctty ~= nil
+    if userOk and ttyOk then
+        entries[#entries + 1] = e
+    end
+end
 table.sort(entries, function(a, b) return a.pid < b.pid end)
 
 local byPid = {}
@@ -134,6 +156,17 @@ local function metaOf(e)
     end
     if showIo then
         bits[#bits + 1] = "io=" .. fmtIo(e.pid)
+    end
+    if showHandlers then
+        local names = {}
+        if e.getHandle then
+            for _, sig in ipairs(HANDLED_SIGNALS) do
+                if e.getHandle(sig) then
+                    names[#names + 1] = sig
+                end
+            end
+        end
+        bits[#bits + 1] = "handlers=" .. (#names > 0 and table.concat(names, ",") or "-")
     end
     return " {" .. table.concat(bits, " ") .. "}"
 end

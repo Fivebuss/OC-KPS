@@ -40,6 +40,18 @@ local function setMode(option, value)
     end
 end
 
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: head [-n N] [-c N] [FILE...]")
+        io.writeln("Displays the first N lines or bytes of FILE or stdin")
+        io.writeln("If no FILE is given, or FILE is -, defaults to stdin")
+        io.writeln("  -n N, number of lines to output")
+        io.writeln("  -c N, number of bytes to output")
+        io.writeln("head -- ; skips parsing options entirely (So filenames can start with -)")
+        os.exit(0)
+    end
+end
+
 local i = 1
 local argCount = #args
 

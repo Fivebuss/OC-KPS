@@ -3,6 +3,19 @@ local total = computer.totalMemory()
 local free  = computer.freeMemory()
 local used  = total - free
 
+for _, a in ipairs(args or {}) do
+    if a == "--help" then
+        io.writeln("Usage: free [-b] [-k] [-m] [-h] [-L]")
+        io.writeln("Shows memory information, including that which has not been GC collected")
+        io.writeln("  -b shows values in bytes (default)")
+        io.writeln("  -k shows values in KiB")
+        io.writeln("  -m shows values in MiB")
+        io.writeln("  -h Human readable format")
+        io.writeln("  -L shows everything on one line")
+        os.exit(0)
+    end
+end
+
 local flag = args and args[1] or nil
 
 local function fmt(bytes)
@@ -24,7 +37,6 @@ local function fmt(bytes)
         return string.format("%d", bytes)
     else
         io.writelnError("free: invalid option: " .. flag)
-        io.writelnError("usage: free [-b|-k|-m|-h|-L]")
         return nil
     end
 end

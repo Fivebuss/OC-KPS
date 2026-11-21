@@ -9,13 +9,23 @@ local pretty = false
 local raw = false
 local since = false
 
-for opt, val in getopt(args, "prs", {}) do
+for opt, val in getopt(args, "prsH", { ["help"] = "H" }) do
     if opt == "p" then
         pretty = true
     elseif opt == "r" then
         raw = true
     elseif opt == "s" then
         since = true
+    elseif opt == "H" then
+        io.writeln("Usage: uptime [-p] [-r] [-s]")
+        io.writeln("Displays the current uptime, or when the system started")
+        io.writeln("  -p, display in days, hours, minutes")
+        io.writeln("  -r, the raw uptime. Default")
+        io.writeln("  -s, estimate system start time")
+        io.writeln("Note about -s")
+        io.writeln("The game always starts at time 0 in the unix epoch time format")
+        io.writeln("As such, -s will be relative to that")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("uptime: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)

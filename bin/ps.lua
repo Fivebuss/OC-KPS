@@ -3,6 +3,8 @@
 
 local getopt = require("ksh.getopt")
 
+local HANDLED_SIGNALS = { "HUP", "INT", "QUIT", "CHLD", "CONT", "TSTP", "TTIN", "TTOU" }
+
 -- GID names
 local GID_NAMES = {}
 for name, gid in pairs(process.GID) do
@@ -68,17 +70,34 @@ local function fmtCtty(e)
     return e.ctty:match("(%x%x%x%x)$") or e.ctty:sub(-4)
 end
 
+local function fmtHandlers(e)
+    if not e.getHandle then return "-" end
+    local names = {}
+    for _, sig in ipairs(HANDLED_SIGNALS) do
+        if e.getHandle(sig) then
+            names[#names + 1] = sig
+        end
+    end
+    return #names > 0 and table.concat(names, ",") or "-"
+end
+
 -- Options
 local all = false
+local showAll = false
 local human = false
 local showIo = false
+local showHandlers = false
 local verbose = false
 
-local shortSpec = "uaxifhV"
+local currentUid = process.self() and process.self().uid or nil
+
+local shortSpec = "uaxsifhVH"
 local longSpec = {
     all = "a",
     human = "h",
+    signals = "s",
     verbose = "V",
+    help = "H",
 }
 
 for opt, val in getopt(args, shortSpec, longSpec) do
@@ -86,6 +105,9 @@ for opt, val in getopt(args, shortSpec, longSpec) do
     elseif opt == "a" then
         all = true
     elseif opt == "x" then
+        showAll = true
+    elseif opt == "s" then
+        showHandlers = true
     elseif opt == "i" then
         showIo = true
     elseif opt == "f" then
@@ -94,6 +116,9 @@ for opt, val in getopt(args, shortSpec, longSpec) do
         human = true
     elseif opt == "V" then
         verbose = true
+    elseif opt == "H" then
+        io.writeln("PS is pending a rewrite")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("ps: unrecognized option '" .. tostring(val) .. "'")
     elseif opt == ":" then
@@ -108,7 +133,15 @@ for opt, val in getopt(args, shortSpec, longSpec) do
     end
 end
 
-local entries = process.list()
+local rawEntries = process.list()
+local entries = {}
+for _, e in ipairs(rawEntries) do
+    local userOk = all or currentUid == nil or e.uid == currentUid
+    local ttyOk = showAll or e.ctty ~= nil
+    if userOk and ttyOk then
+        entries[#entries + 1] = e
+    end
+end
 
 table.sort(entries, function(a, b)
     return a.pid < b.pid
@@ -128,17 +161,21 @@ local rowFn
 if all then
     if human then
         header = {
-            "LABEL", "PID", "PPID", "UID", "AGE",
+            "LABEL", "CMD", "PID", "PPID", "UID", "AGE",
             "SPAWNED", "S", "GROUP", "TTY",
         }
 
         if showIo then
             header[#header + 1] = "IO"
         end
+        if showHandlers then
+            header[#header + 1] = "HANDLERS"
+        end
 
         rowFn = function(e)
             local row = {
-                cmdOrLabel(e),
+                e.label or "-",
+                e.cmd or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
                 tostring(e.uid or "-"),
@@ -152,27 +189,33 @@ if all then
             if showIo then
                 row[#row + 1] = fmtIo(e.pid, true)
             end
+            if showHandlers then
+                row[#row + 1] = fmtHandlers(e)
+            end
 
             return row
         end
     else
         header = {
-            "LABEL", "PID", "PPID", "UID", "GID", "CMD",
+            "LABEL", "CMD", "PID", "PPID", "UID", "GID",
             "AGE", "SPAWNED", "S", "TTY",
         }
 
         if showIo then
             header[#header + 1] = "IO"
         end
+        if showHandlers then
+            header[#header + 1] = "HANDLERS"
+        end
 
         rowFn = function(e)
             local row = {
                 e.label or "-",
+                e.cmd or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
                 tostring(e.uid or "-"),
                 gidName(e.gid),
-                e.cmd or "?",
                 fmtSeconds(e.age, false),
                 fmtSeconds(e.spawnedAt, false),
                 statusChar(e),
@@ -182,21 +225,28 @@ if all then
             if showIo then
                 row[#row + 1] = fmtIo(e.pid, false)
             end
+            if showHandlers then
+                row[#row + 1] = fmtHandlers(e)
+            end
 
             return row
         end
     end
 else
     if human then
-        header = { "LABEL", "PID", "PPID", "AGE", "S", "TTY" }
+        header = { "LABEL", "CMD", "PID", "PPID", "AGE", "S", "TTY" }
 
         if showIo then
             header[#header + 1] = "IO"
         end
+        if showHandlers then
+            header[#header + 1] = "HANDLERS"
+        end
 
         rowFn = function(e)
             local row = {
-                cmdOrLabel(e),
+                e.label or "-",
+                e.cmd or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
                 fmtSeconds(e.age, true),
@@ -207,24 +257,30 @@ else
             if showIo then
                 row[#row + 1] = fmtIo(e.pid, true)
             end
+            if showHandlers then
+                row[#row + 1] = fmtHandlers(e)
+            end
 
             return row
         end
     else
         header = {
-            "LABEL", "PID", "PPID", "CMD", "AGE", "S", "TTY",
+            "LABEL", "CMD", "PID", "PPID", "AGE", "S", "TTY",
         }
 
         if showIo then
             header[#header + 1] = "IO"
         end
+        if showHandlers then
+            header[#header + 1] = "HANDLERS"
+        end
 
         rowFn = function(e)
             local row = {
                 e.label or "-",
+                e.cmd or "-",
                 tostring(e.pid),
                 tostring(e.ppid or "-"),
-                e.cmd or "?",
                 fmtSeconds(e.age, false),
                 statusChar(e),
                 fmtCtty(e),
@@ -232,6 +288,9 @@ else
 
             if showIo then
                 row[#row + 1] = fmtIo(e.pid, false)
+            end
+            if showHandlers then
+                row[#row + 1] = fmtHandlers(e)
             end
 
             return row

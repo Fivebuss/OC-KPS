@@ -78,6 +78,15 @@ local function processTarget(rawArg)
 end
 
 -- Begin
+for _, a in ipairs(args) do
+    if a == "--help" then
+        io.writeln("Usage: cat [FILE]...")
+        io.writeln("Concatenates files to stdout")
+        io.writeln("\nWith no FILE(s), or when FILE is -, reads from stdin")
+        os.exit(0)
+    end
+end
+
 if #args == 0 then
     readStdin()
 else

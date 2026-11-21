@@ -6,10 +6,21 @@ local getopt = require("ksh.getopt")
 local interactive = false
 local args = { ... }
 
+local stopLoop = false
+
+process.self().setHandle(process.SIG.INT, function()
+    stopLoop = true
+end)
+
 -- who else uses the others
-for opt, val in getopt(args, "i", {}) do
+for opt, val in getopt(args, "iH", { ["help"] = "H" }) do
     if opt == "i" then
         interactive = true
+    elseif opt == "H" then
+        io.writeln("Usage: mv [-i] SOURCE DEST")
+        io.writeln("Moves SOURCE(s) to DEST")
+        io.writeln("  -i, asks each move")
+        os.exit(0)
     elseif opt == "?" then
         io.writelnError("mv: unrecognized option '" .. tostring(val) .. "'")
         os.exit(1)
@@ -103,7 +114,8 @@ for _, source in ipairs(sources) do
         end
     end
 
-    if coroutine.yield() == "INT" then
+    coroutine.yield()
+    if stopLoop then
         os.exit(130)
     end
 end
