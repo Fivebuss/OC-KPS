@@ -851,7 +851,7 @@ local function parseSegment(words, getenv)
                 if aliasFd then
                     aliasFd = tonumber(aliasFd)
                     redirects.fdAliases = redirects.fdAliases or {}
-                    redirects.fdAliases[fd] = aliasFd
+                    redirects.fdAliases[#redirects.fdAliases + 1] = { dst = fd, src = aliasFd }
                 else
                     local target = dealWithToken(rawTarget)[1]
                     if fd == 0 or op == "<" then
@@ -1057,16 +1057,17 @@ local function makeStreams(inPipe, outPipe, redirects)
     -- Yay fd aliasing
     if redirects.fdAliases then
         local resolved = { [0] = stdin, [1] = stdout, [2] = stderr }
-        for dst, src in pairs(redirects.fdAliases) do
-            local stream = resolved[src]
+        for _, alias in ipairs(redirects.fdAliases) do
+            local stream = resolved[alias.src]
             if not stream then
-                return fail("bad file descriptor: &" .. src)
+                return fail("bad file descriptor: &" .. alias.src)
             end
-            if dst == 0 then
+            resolved[alias.dst] = stream
+            if alias.dst == 0 then
                 stdin = stream
-            elseif dst == 1 then
+            elseif alias.dst == 1 then
                 stdout = stream
-            elseif dst == 2 then
+            elseif alias.dst == 2 then
                 stderr = stream
             end
         end

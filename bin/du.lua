@@ -57,6 +57,10 @@ for opt, val in getopt(args or {}, opts, longopts) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 -- -s is equivalent to -d 0
 if summarize then
     maxDepth = 0

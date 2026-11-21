@@ -36,6 +36,10 @@ for opt, val in getopt(args or {}, opts, longopts) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 if #args == 0 then
     io.writelnError("stat: missing operand")
     os.exit(1)

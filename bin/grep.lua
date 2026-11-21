@@ -126,6 +126,10 @@ for opt, arg in getopt(args, "EFce:f:ilnqsvxoH", { ["help"] = "H" }) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 -- Split on |
 local function splitEREPattern(pat)
     local parts = {}

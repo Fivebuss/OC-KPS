@@ -78,20 +78,33 @@ local function processTarget(rawArg)
 end
 
 -- Begin
+local fileArgs = {}
+local helpRequested = false
+local stopOptions = false
+
+-- Supports -- because files can have - in them which I forgot here
 for _, a in ipairs(args) do
-    if a == "--help" then
-        io.writeln("Usage: cat [FILE]...")
-        io.writeln("Concatenates files to stdout")
-        io.writeln("\nWith no FILE(s), or when FILE is -, reads from stdin")
-        os.exit(0)
+    if not stopOptions and a == "--" then
+        stopOptions = true
+    elseif not stopOptions and a == "--help" then
+        helpRequested = true
+    else
+        table.insert(fileArgs, a)
     end
 end
 
-if #args == 0 then
+if helpRequested then
+    io.writeln("Usage: cat [FILE]...")
+    io.writeln("Concatenates files to stdout")
+    io.writeln("\nWith no FILE(s), or when FILE is -, reads from stdin")
+    os.exit(0)
+end
+
+if #fileArgs == 0 then
     readStdin()
 else
     local hasError = false
-    for _, arg in ipairs(args) do
+    for _, arg in ipairs(fileArgs) do
         if not processTarget(arg) then
             hasError = true
         end

@@ -712,14 +712,42 @@ process.sendData = process.send
 
 -- stdin/stdout/stderr are raw streams abd stdin is fully buffered, stdout
 -- and stderr are line-buffered
+-- This had weird duplication problems, so attempt #2
 function process.create(pid, stdin, stdout, stderr)
     checkArg(1, pid, "number")
 
-    processIO[pid] = {
-        [0] = io.newDescriptor(polaris.buffer.new("rb", stdin)),
-        [1] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("wb", stdout))),
-        [2] = io.newDescriptor(io.newLineBuffered(polaris.buffer.new("wb", stderr))),
-    }
+    local sources = { [0] = stdin, [1] = stdout, [2] = stderr }
+    local modes = { [0] = "rb", [1] = "wb", [2] = "wb" }
+    local buffers = {}
+
+    local descs = {}
+    for fd = 0, 2 do
+        local stream = sources[fd]
+        local mode = modes[fd]
+        local group = stream and buffers[stream]
+        local existing = group and group[mode]
+        local desc
+        if existing then
+            desc = io.dup(existing)
+        else
+            local buf = polaris.buffer.new(mode, stream)
+            if fd == 1 or fd == 2 then
+                buf = io.newLineBuffered(buf)
+            end
+            desc = io.newDescriptor(buf)
+            if stream then
+                if not group then
+                    group = {}
+                    buffers[stream] = group
+                end
+                group[mode] = desc
+            end
+        end
+        
+        descs[fd] = desc
+    end
+
+    processIO[pid] = descs
 end
 
 -- Closes fd 0/1/2 for pid without forgetting the entry

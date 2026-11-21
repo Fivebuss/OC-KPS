@@ -11,8 +11,11 @@ for _, a in ipairs(args) do
     end
 end
 
+local stopOptions = false
 for _, arg in ipairs(args) do
-    if arg:sub(1, 1) == "-" and #arg > 1 then
+    if not stopOptions and arg == "--" then
+        stopOptions = true
+    elseif not stopOptions and arg:sub(1, 1) == "-" and #arg > 1 then
         io.writelnError("touch: invalid option -- '" .. arg:sub(2, 2) .. "'")
         io.writelnError("Usage: touch FILE...")
         os.exit(1)

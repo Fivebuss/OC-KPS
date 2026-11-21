@@ -42,6 +42,10 @@ for opt, val in getopt(args, "lcmwH", { ["help"] = "H" }) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 if not showLines and not showBytes and not showChars and not showWords then
     showLines = true
     showWords = true

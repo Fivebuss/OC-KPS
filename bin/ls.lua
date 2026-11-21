@@ -53,6 +53,10 @@ for opt, val in getopt(args or {}, opts, longopts) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 -- When I get around to console driver this will go away
 local termWidth = 80
 if polaris and polaris.gpu and polaris.gpu.getResolution then

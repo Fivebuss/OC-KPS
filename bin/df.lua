@@ -36,6 +36,10 @@ for opt, val in getopt(args or {}, opts, longopts) do
     end
 end
 
+if args[1] == "--" then
+    table.remove(args, 1)
+end
+
 local function formatSize(size)
     if not humanReadable then
         return tostring(size)
